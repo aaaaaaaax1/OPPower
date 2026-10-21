@@ -70,8 +70,8 @@ internal fun ChargeSettingsPage(
 
         Surface(
             color = Surface,
-            shape = RoundedCornerShape(13.dp),
-            border = BorderStroke(1.dp, Color(0xFF2C6B5F)),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, Color(0xFF2A3B40)),
         ) {
             Column(Modifier.padding(13.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -110,8 +110,8 @@ internal fun ChargeSettingsPage(
 
         Surface(
             color = Surface,
-            shape = RoundedCornerShape(13.dp),
-            border = BorderStroke(1.dp, Color(0xFF35484E)),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, Color(0xFF2A3B40)),
         ) {
             Column(Modifier.padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -252,7 +252,7 @@ internal fun ChargeSettingsPage(
             CustomRulePreview(state.settings)
         }
 
-        Surface(color = Color(0xFF101B20), shape = RoundedCornerShape(11.dp), border = BorderStroke(1.dp, Color(0xFF35484E))) {
+        Surface(color = Surface, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, Color(0xFF2A3B40))) {
             Column(Modifier.padding(11.dp)) {
                 Text("动态调节规则", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 Text("• 内部档位按 0.5°C 分段计算。", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
@@ -347,7 +347,7 @@ private fun DefaultRuleCard(settings: RuntimeSettings) {
             "T ≥ 43.0°C" to "暂停 gear，单速保持 1",
         )
     }
-    Surface(color = Color(0xFF101B20), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, Color(0xFF35484E))) {
+    Surface(color = Surface, shape = RoundedCornerShape(11.dp), border = BorderStroke(1.dp, Color(0xFF2A3B40))) {
         Column(Modifier.padding(11.dp)) {
             Text("默认策略 · ${settings.baseTier.label}", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             rows.forEach { (range, target) ->
@@ -424,7 +424,7 @@ private fun settingsBaseTier(settings: RuntimeSettings): ControlTier = when (set
 @Composable
 private fun CustomRulePreview(settings: RuntimeSettings) {
     val rules = settings.customRules.temperatureRules.sortedBy { it.threshold }
-    Surface(color = Surface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, Color(0xFF35484E))) {
+    Surface(color = Surface, shape = RoundedCornerShape(11.dp), border = BorderStroke(1.dp, Color(0xFF2A3B40))) {
         Column(Modifier.padding(11.dp)) {
             Text("当前自定义区间", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(
@@ -459,7 +459,7 @@ private fun PageHeader(title: String, subtitle: String, onBack: () -> Unit) {
             modifier = Modifier.clickable(onClick = onBack).padding(end = 13.dp),
         )
         Column {
-            Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text(title, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Text(subtitle, color = TextSecondary, fontSize = 10.sp)
         }
     }

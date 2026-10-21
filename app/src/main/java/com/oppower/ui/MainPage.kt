@@ -129,7 +129,10 @@ internal fun MainPage(
 
         Text("充放电记录", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         SessionRecords(state.points, state.chargeRecords, state.dischargeRecords)
-        Text("实时曲线", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("实时曲线", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text("保留最近 24 小时", color = TextSecondary, fontSize = 9.sp)
+        }
         RealtimeChart(state.points)
         Text(
             "功率和温度来自手机电池接口，仅用于趋势判断；实际输入功率以外部功率计为准。",
@@ -233,8 +236,8 @@ private fun ActionTile(label: String, value: String, modifier: Modifier) {
         border = BorderStroke(1.dp, Color(0xFF2A3B40)),
     ) {
         Column(Modifier.padding(horizontal = 6.dp, vertical = 8.dp)) {
-            Text(label, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Text(value, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.padding(top = 3.dp))
+            Text(label, color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+            Text(value, color = TextPrimary, fontSize = 9.sp, modifier = Modifier.padding(top = 3.dp))
         }
     }
 }
@@ -249,7 +252,7 @@ private fun ForceChargeCard(
         modifier = Modifier.fillMaxWidth(),
         color = Surface,
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Color(0xFF2C6B5F)),
+        border = BorderStroke(1.dp, Color(0xFF2B3A40)),
     ) {
         Column(Modifier.padding(13.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -373,9 +376,9 @@ private fun RealtimeChart(points: List<ChartPoint>) {
     var endFraction by remember { mutableFloatStateOf(1f) }
     val firstMillis = points.firstOrNull()?.epochMillis ?: now
     val lastMillis = points.lastOrNull()?.epochMillis ?: now
-    val available = (lastMillis - firstMillis).coerceAtLeast(windowMillis)
-    val windowEnd = firstMillis + available * endFraction.coerceIn(0f, 1f)
-    val windowStart = windowEnd - windowMillis
+    val availableRange = (lastMillis - firstMillis - windowMillis).coerceAtLeast(0L)
+    val windowStart = firstMillis + availableRange * endFraction.coerceIn(0f, 1f)
+    val windowEnd = windowStart + windowMillis
     val visiblePoints = points.filter { it.epochMillis in windowStart.toLong()..windowEnd.toLong() }
     val powerMax = max(5f, visiblePoints.maxOfOrNull { it.powerW } ?: 5f)
     val temps = visiblePoints.map { it.temperatureC }
@@ -399,7 +402,7 @@ private fun RealtimeChart(points: List<ChartPoint>) {
                     .fillMaxWidth()
                     .height(164.dp)
                     .padding(top = 8.dp)
-                    .pointerInput(available, windowMillis) {
+                    .pointerInput(availableRange, windowMillis) {
                         detectHorizontalDragGestures { _, dragAmount ->
                             endFraction = (endFraction - dragAmount / size.width).coerceIn(0f, 1f)
                         }
