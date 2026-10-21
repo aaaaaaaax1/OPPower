@@ -133,7 +133,7 @@ internal fun MainPage(
             Text("实时曲线", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
             Text("保留最近 24 小时", color = TextSecondary, fontSize = 9.sp)
         }
-        RealtimeChart(state.points)
+        RealtimeCharts(state.points)
         Text(
             "功率和温度来自手机电池接口，仅用于趋势判断；实际输入功率以外部功率计为准。",
             color = TextSecondary,
@@ -370,7 +370,7 @@ private fun RecordCard(
 }
 
 @Composable
-private fun RealtimeChart(points: List<ChartPoint>) {
+private fun RealtimeCharts(points: List<ChartPoint>) {
     val now = System.currentTimeMillis()
     val windowMillis = 2L * 60L * 60L * 1_000L
     var endFraction by remember { mutableFloatStateOf(1f) }
@@ -380,75 +380,108 @@ private fun RealtimeChart(points: List<ChartPoint>) {
     val windowStart = firstMillis + availableRange * endFraction.coerceIn(0f, 1f)
     val windowEnd = windowStart + windowMillis
     val visiblePoints = points.filter { it.epochMillis in windowStart.toLong()..windowEnd.toLong() }
-    val powerMax = max(5f, visiblePoints.maxOfOrNull { it.powerW } ?: 5f)
+    val peakPower = visiblePoints.maxOfOrNull { it.powerW } ?: 5f
+    val powerMax = (Math.ceil(peakPower / 10.0).toFloat() * 10f).coerceAtLeast(10f)
     val temps = visiblePoints.map { it.temperatureC }
     val tempMin = (temps.minOrNull() ?: 30f).coerceAtMost(40f)
     val tempMax = max(tempMin + 1f, temps.maxOrNull() ?: 42f)
+    val onDrag: (Float) -> Unit = { dragAmount ->
+        endFraction = (endFraction - dragAmount).coerceIn(0f, 1f)
+    }
+
+    Text("功率曲线", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    ChartCard(
+        title = "实时功率",
+        unit = "W",
+        color = Cyan,
+        points = visiblePoints,
+        windowStart = windowStart.toLong(),
+        windowMillis = windowMillis,
+        minimumY = 0f,
+        maximumY = powerMax,
+        value = { it.powerW },
+        onDrag = onDrag,
+    )
+    Text("温度曲线", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp))
+    ChartCard(
+        title = "电池温度",
+        unit = "°C",
+        color = Amber,
+        points = visiblePoints,
+        windowStart = windowStart.toLong(),
+        windowMillis = windowMillis,
+        minimumY = tempMin,
+        maximumY = tempMax,
+        value = { it.temperatureC },
+        onDrag = onDrag,
+    )
+    Text(
+        "两张图共用时间窗口 · 每 15 分钟一个时间节点 · 左右拖动查看最近 24 小时",
+        color = TextSecondary,
+        fontSize = 8.sp,
+        modifier = Modifier.padding(top = 2.dp),
+    )
+}
+
+@Composable
+private fun ChartCard(
+    title: String,
+    unit: String,
+    color: Color,
+    points: List<ChartPoint>,
+    windowStart: Long,
+    windowMillis: Long,
+    minimumY: Float,
+    maximumY: Float,
+    value: (ChartPoint) -> Float,
+    onDrag: (Float) -> Unit,
+) {
     Surface(
         color = Surface,
-        shape = RoundedCornerShape(13.dp),
+        shape = RoundedCornerShape(11.dp),
         border = BorderStroke(1.dp, Color(0xFF2A3B40)),
     ) {
-        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+        Column(Modifier.fillMaxWidth().padding(9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Legend(Cyan, "功率 W")
-                Spacer(Modifier.width(12.dp))
-                Legend(Amber, "温度 °C")
-                Spacer(Modifier.weight(1f))
-                Text("左右拖动 · 2 小时窗口", color = TextSecondary, fontSize = 9.sp)
+                Text(title, color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("2 小时窗口", color = TextSecondary, fontSize = 8.sp)
             }
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(164.dp)
-                    .padding(top = 8.dp)
-                    .pointerInput(availableRange, windowMillis) {
+                    .height(128.dp)
+                    .padding(top = 6.dp)
+                    .pointerInput(windowMillis) {
                         detectHorizontalDragGestures { _, dragAmount ->
-                            endFraction = (endFraction - dragAmount / size.width).coerceIn(0f, 1f)
+                            onDrag(dragAmount / size.width)
                         }
                     },
             ) {
-                Canvas(Modifier.fillMaxSize().padding(start = 34.dp, end = 36.dp, top = 13.dp, bottom = 18.dp)) {
+                Canvas(Modifier.fillMaxSize().padding(start = 31.dp, end = 32.dp, top = 9.dp, bottom = 16.dp)) {
                     val right = size.width
                     val bottom = size.height
+                    val span = (maximumY - minimumY).coerceAtLeast(1f)
                     repeat(5) { index ->
                         val y = bottom * index / 4f
                         drawLine(Color(0xFF2A3B40), Offset(0f, y), Offset(right, y), 1f)
                     }
-                    if (visiblePoints.size >= 2) {
-                        val powerPath = Path()
-                        val tempPath = Path()
-                        visiblePoints.forEachIndexed { index, point ->
+                    if (points.size >= 2) {
+                        val path = Path()
+                        points.forEachIndexed { index, point ->
                             val x = right * ((point.epochMillis - windowStart).toFloat() / windowMillis).coerceIn(0f, 1f)
-                            val powerY = bottom - bottom * (point.powerW / powerMax).coerceIn(0f, 1f)
-                            val tempY = bottom - bottom * ((point.temperatureC - tempMin) / (tempMax - tempMin)).coerceIn(0f, 1f)
-                            if (index == 0) {
-                                powerPath.moveTo(x, powerY)
-                                tempPath.moveTo(x, tempY)
-                            } else {
-                                powerPath.lineTo(x, powerY)
-                                tempPath.lineTo(x, tempY)
-                            }
+                            val y = bottom - bottom * ((value(point) - minimumY) / span).coerceIn(0f, 1f)
+                            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                         }
-                        drawPath(tempPath, Amber, style = Stroke(1.8f))
-                        drawPath(powerPath, Cyan, style = Stroke(2.3f))
+                        drawPath(path, color, style = Stroke(2f))
                     }
                 }
-                Text("${powerMax.oneDecimal()} W", color = Cyan, fontSize = 8.sp, modifier = Modifier.align(Alignment.TopStart))
-                Text("0 W", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomStart))
-                Text("${tempMax.oneDecimal()} °C", color = Amber, fontSize = 8.sp, modifier = Modifier.align(Alignment.TopEnd))
-                Text("${tempMin.oneDecimal()} °C", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomEnd))
-                if (visiblePoints.size < 2) {
-                    Text("等待采样…", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.align(Alignment.Center))
+                Text("${maximumY.oneDecimal()} $unit", color = color, fontSize = 7.sp, modifier = Modifier.align(Alignment.TopStart))
+                Text("${minimumY.oneDecimal()} $unit", color = TextSecondary, fontSize = 7.sp, modifier = Modifier.align(Alignment.BottomStart))
+                if (points.size < 2) {
+                    Text("等待采样…", color = TextSecondary, fontSize = 9.sp, modifier = Modifier.align(Alignment.Center))
                 }
             }
-            TimelineLabels(windowStart.toLong(), windowMillis)
-            Text(
-                "每 15 分钟一个时间节点 · 保留最近 24 小时 · 拖动查看历史",
-                color = TextSecondary,
-                fontSize = 8.sp,
-                modifier = Modifier.padding(top = 5.dp),
-            )
+            TimelineLabels(windowStart, windowMillis)
         }
     }
 }
@@ -464,15 +497,6 @@ private fun TimelineLabels(windowStart: Long, windowMillis: Long) {
                 fontSize = 7.sp,
             )
         }
-    }
-}
-
-@Composable
-private fun Legend(color: Color, label: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(7.dp).background(color, CircleShape))
-        Spacer(Modifier.width(5.dp))
-        Text(label, color = TextSecondary, fontSize = 9.sp)
     }
 }
 
