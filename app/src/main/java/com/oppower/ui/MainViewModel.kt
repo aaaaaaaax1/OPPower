@@ -5,9 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.oppower.battery.BatteryReader
 import com.oppower.data.PreferencesStore
+import com.oppower.history.ChartHistoryBus
+import com.oppower.history.ChartHistoryStore
 import com.oppower.model.BatterySnapshot
-import com.oppower.model.ChartPoint
 import com.oppower.model.ChargeRecord
+import com.oppower.model.ChartPoint
 import com.oppower.model.ControllerStatus
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.conservatismRank
@@ -19,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 data class UiState(
@@ -37,9 +40,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val reader = BatteryReader(application)
     private val store = PreferencesStore(application)
     private val shizuku = ShizukuGateway(application)
+    private val historyStore = ChartHistoryStore(application)
     private val mutable = MutableStateFlow(
         UiState(
             settings = store.load(),
+            points = historyStore.load(),
             showIntro = !store.introSeen(),
             shizukuAvailable = shizuku.isAvailable,
             shizukuPermission = shizuku.hasPermission,
@@ -49,22 +54,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
+            ChartHistoryBus.points.collectLatest { points ->
+                mutable.value = mutable.value.copy(points = points)
+            }
+        }
+        viewModelScope.launch {
             while (true) {
                 val battery = reader.snapshot()
-                val now = System.currentTimeMillis()
                 val previous = mutable.value.points.lastOrNull()
-                val allPoints = (
-                    mutable.value.points + ChartPoint(
-                        epochMillis = now,
-                        powerW = battery.powerW,
-                        temperatureC = battery.temperatureC,
-                        levelPercent = battery.levelPercent,
-                        acOnline = battery.acOnline,
-                    )
-                ).takeLast(180)
-                val points = allPoints.takeLast(180)
+                val points = mutable.value.points.ifEmpty { historyStore.load() }
                 val completed = if (previous != null && previous.acOnline != battery.acOnline) {
-                    toRecord(allPoints.dropLast(1))
+                    toRecord(points)
                 } else {
                     null
                 }

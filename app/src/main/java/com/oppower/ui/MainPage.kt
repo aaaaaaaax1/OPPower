@@ -3,8 +3,8 @@ package com.oppower.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,14 +25,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -140,23 +144,15 @@ internal fun MainPage(
 private fun PowerHero(state: UiState) {
     val shape = RoundedCornerShape(17.dp)
     val battery = state.battery
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    listOf(Color(0xFF142A28), Color(0xFF101B22)),
-                    start = Offset.Zero,
-                    end = Offset(900f, 420f),
-                ),
-            )
-            .border(1.dp, Color(0xFF2F6A5D), shape)
-            .padding(15.dp),
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Surface,
+        shape = shape,
+        border = BorderStroke(1.dp, Color(0xFF2B3A40)),
     ) {
-        Column {
+        Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = Color(0xFF174B3F), shape = RoundedCornerShape(99.dp)) {
+                Surface(color = Color(0xFF1A2C2B), shape = RoundedCornerShape(99.dp)) {
                     Row(
                         Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -175,7 +171,7 @@ private fun PowerHero(state: UiState) {
                 Text(state.controllerStatus.phase.label, color = TextSecondary, fontSize = 10.sp)
             }
             Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 7.dp)) {
-                Text(battery.powerW.oneDecimal(), color = TextPrimary, fontSize = 39.sp, fontWeight = FontWeight.Black)
+                Text(battery.powerW.oneDecimal(), color = TextPrimary, fontSize = 38.sp, fontWeight = FontWeight.Bold)
                 Text(" W", color = TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(bottom = 7.dp))
             }
             Text("实时电池功率", color = TextSecondary, fontSize = 10.sp)
@@ -193,7 +189,7 @@ private fun PowerHero(state: UiState) {
                         Modifier
                             .fillMaxWidth((battery.levelPercent / 100f).coerceIn(0f, 1f))
                             .height(5.dp)
-                            .background(Cyan, RoundedCornerShape(99.dp)),
+                            .background(Color(0xFF73C9B5), RoundedCornerShape(99.dp)),
                     )
                 }
                 Text("${battery.temperatureC.oneDecimal()}°C", color = TextSecondary, fontSize = 10.sp)
@@ -372,8 +368,17 @@ private fun RecordCard(
 
 @Composable
 private fun RealtimeChart(points: List<ChartPoint>) {
-    val powerMax = max(5f, points.maxOfOrNull { it.powerW } ?: 5f)
-    val temps = points.map { it.temperatureC }
+    val now = System.currentTimeMillis()
+    val windowMillis = 2L * 60L * 60L * 1_000L
+    var endFraction by remember { mutableFloatStateOf(1f) }
+    val firstMillis = points.firstOrNull()?.epochMillis ?: now
+    val lastMillis = points.lastOrNull()?.epochMillis ?: now
+    val available = (lastMillis - firstMillis).coerceAtLeast(windowMillis)
+    val windowEnd = firstMillis + available * endFraction.coerceIn(0f, 1f)
+    val windowStart = windowEnd - windowMillis
+    val visiblePoints = points.filter { it.epochMillis in windowStart.toLong()..windowEnd.toLong() }
+    val powerMax = max(5f, visiblePoints.maxOfOrNull { it.powerW } ?: 5f)
+    val temps = visiblePoints.map { it.temperatureC }
     val tempMin = (temps.minOrNull() ?: 30f).coerceAtMost(40f)
     val tempMax = max(tempMin + 1f, temps.maxOrNull() ?: 42f)
     Surface(
@@ -387,9 +392,19 @@ private fun RealtimeChart(points: List<ChartPoint>) {
                 Spacer(Modifier.width(12.dp))
                 Legend(Amber, "温度 °C")
                 Spacer(Modifier.weight(1f))
-                Text("真实时间", color = TextSecondary, fontSize = 9.sp)
+                Text("左右拖动 · 2 小时窗口", color = TextSecondary, fontSize = 9.sp)
             }
-            Box(Modifier.fillMaxWidth().height(164.dp).padding(top = 8.dp)) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(164.dp)
+                    .padding(top = 8.dp)
+                    .pointerInput(available, windowMillis) {
+                        detectHorizontalDragGestures { _, dragAmount ->
+                            endFraction = (endFraction - dragAmount / size.width).coerceIn(0f, 1f)
+                        }
+                    },
+            ) {
                 Canvas(Modifier.fillMaxSize().padding(start = 34.dp, end = 36.dp, top = 13.dp, bottom = 18.dp)) {
                     val right = size.width
                     val bottom = size.height
@@ -397,11 +412,11 @@ private fun RealtimeChart(points: List<ChartPoint>) {
                         val y = bottom * index / 4f
                         drawLine(Color(0xFF2A3B40), Offset(0f, y), Offset(right, y), 1f)
                     }
-                    if (points.size >= 2) {
+                    if (visiblePoints.size >= 2) {
                         val powerPath = Path()
                         val tempPath = Path()
-                        points.forEachIndexed { index, point ->
-                            val x = right * index / (points.size - 1).toFloat()
+                        visiblePoints.forEachIndexed { index, point ->
+                            val x = right * ((point.epochMillis - windowStart).toFloat() / windowMillis).coerceIn(0f, 1f)
                             val powerY = bottom - bottom * (point.powerW / powerMax).coerceIn(0f, 1f)
                             val tempY = bottom - bottom * ((point.temperatureC - tempMin) / (tempMax - tempMin)).coerceIn(0f, 1f)
                             if (index == 0) {
@@ -420,17 +435,31 @@ private fun RealtimeChart(points: List<ChartPoint>) {
                 Text("0 W", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomStart))
                 Text("${tempMax.oneDecimal()} °C", color = Amber, fontSize = 8.sp, modifier = Modifier.align(Alignment.TopEnd))
                 Text("${tempMin.oneDecimal()} °C", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomEnd))
-                if (points.size < 2) {
+                if (visiblePoints.size < 2) {
                     Text("等待采样…", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.align(Alignment.Center))
                 }
             }
-            val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            val start = points.firstOrNull()?.epochMillis ?: System.currentTimeMillis()
-            val end = points.lastOrNull()?.epochMillis ?: start
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatter.format(Date(start)), color = TextSecondary, fontSize = 8.sp)
-                Text(formatter.format(Date(end)), color = TextSecondary, fontSize = 8.sp)
-            }
+            TimelineLabels(windowStart.toLong(), windowMillis)
+            Text(
+                "每 15 分钟一个时间节点 · 保留最近 24 小时 · 拖动查看历史",
+                color = TextSecondary,
+                fontSize = 8.sp,
+                modifier = Modifier.padding(top = 5.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimelineLabels(windowStart: Long, windowMillis: Long) {
+    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        repeat(9) { index ->
+            Text(
+                formatter.format(Date(windowStart + windowMillis * index / 8L)),
+                color = TextSecondary,
+                fontSize = 7.sp,
+            )
         }
     }
 }

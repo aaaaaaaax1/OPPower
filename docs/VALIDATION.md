@@ -36,7 +36,7 @@ gear 0 是全局策略下的系统最高输出档，本次没有作为功率区�
 截至 2026-10-21：
 
 - `:app:compileDebugKotlin` 通过。
-- `:app:testDebugUnitTest` 通过，覆盖默认温度档、SOC 暂停、100%/FULL、禁止更高温反向升档、均衡档内部 gear 和 Shizuku 命令白名单。
+- `:app:testDebugUnitTest` 通过，覆盖默认温度档、SOC 暂停、100%/FULL、禁止更高温反向升档、均衡档内部 gear、Shizuku 命令白名单和 24 小时曲线记录序列化。
 - 未执行 `:app:assembleDebug` 或 `:app:assembleRelease`。
 - 未安装到真机，尚未验证 Shizuku user service、前台服务保活和实际外接功率。
 

@@ -13,6 +13,8 @@ import com.oppower.MainActivity
 import com.oppower.battery.BatteryReader
 import com.oppower.controller.ChargingController
 import com.oppower.data.PreferencesStore
+import com.oppower.history.ChartHistoryBus
+import com.oppower.history.ChartHistoryStore
 import com.oppower.model.ControllerPhase
 import com.oppower.model.ControllerStatus
 import com.oppower.shizuku.ShizukuGateway
@@ -30,6 +32,7 @@ class ChargeControlService : Service() {
     private lateinit var controller: ChargingController
     private lateinit var batteryReader: BatteryReader
     private lateinit var prefs: PreferencesStore
+    private lateinit var historyStore: ChartHistoryStore
     private var lastNotificationText = ""
 
     override fun onCreate() {
@@ -38,6 +41,8 @@ class ChargeControlService : Service() {
         controller = ChargingController(shizuku)
         batteryReader = BatteryReader(this)
         prefs = PreferencesStore(this)
+        historyStore = ChartHistoryStore(this)
+        ChartHistoryBus.points.value = historyStore.load()
         createChannel()
         startForeground(NOTIFICATION_ID, notification("等待接入电源"))
         scope.launch {
@@ -58,6 +63,9 @@ class ChargeControlService : Service() {
                     else -> 5_000L
                 }
                 withTimeoutOrNull(waitMillis) { ChargeControlBus.wakeRequests.receive() }
+                // Sampling follows the service cadence. The store coalesces
+                // samples to one point every 30 seconds and persists 24 hours.
+                ChartHistoryBus.points.value = historyStore.record(batteryReader.snapshot())
             }
         }
     }
