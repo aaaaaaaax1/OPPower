@@ -32,10 +32,10 @@ class ChargingController(
         }
 
         if (!shizuku.isAvailable) {
-            return ControllerStatus(ControllerPhase.ERROR, "Shizuku 未运行，未写入新策略")
+            return ControllerStatus(ControllerPhase.ERROR, "Shizuku 未运行，未写入新的充电设置")
         }
         if (!shizuku.hasPermission) {
-            return ControllerStatus(ControllerPhase.ERROR, "Shizuku 未授权，未写入新策略")
+            return ControllerStatus(ControllerPhase.ERROR, "OPPower 尚未获得 Shizuku 授权")
         }
 
         return runCatching {
@@ -54,7 +54,7 @@ class ChargingController(
             if (full) {
                 restoreBoth()
                 lastFull = true
-                return ControllerStatus(ControllerPhase.FULL_PAUSED, "电量 100% / FULL：已恢复 cosa=0 并关闭单速")
+                return ControllerStatus(ControllerPhase.FULL_PAUSED, "电量已充满：已恢复系统默认并关闭快充保持")
             }
             if (lastFull) {
                 restoreBoth()
@@ -68,7 +68,7 @@ class ChargingController(
                 restoreOffset(keepSingleSpeed = true)
                 return ControllerStatus(
                     ControllerPhase.SOC_PAUSED,
-                    "电量达到 ${settings.customRules.socStopPercent}%：本次插电暂停 gear 策略",
+                    "电量达到 ${settings.customRules.socStopPercent}%：本次插电已暂停快充增强",
                     sessionSocLocked = true,
                 )
             }
@@ -99,7 +99,7 @@ class ChargingController(
             val policy = readPolicy()
             if (!policy.isParsed) {
                 restoreOffset(keepSingleSpeed = true)
-                return ControllerStatus(ControllerPhase.ERROR, "热控策略无法回读，已恢复默认")
+                return ControllerStatus(ControllerPhase.ERROR, "系统充电状态无法确认，已恢复默认")
             }
             val baseGear = (policy.gear ?: 0) - currentCosa
             val desiredCosa = target - baseGear
@@ -121,27 +121,27 @@ class ChargingController(
                     if (target == 1) {
                         null
                     } else {
-                        error("策略回读为空")
+                    error("系统充电状态为空")
                     }
                 } else {
-                    require(after.gear == target) { "回读 gear ${after.gear}，目标 $target" }
-                    require((after.chargeVal ?: -1) >= 0) { "chargeVal 无效" }
-                    require((after.speedChargeAdd ?: -1) >= 0) { "speedChargeAdd 无效" }
+                    require(after.gear == target) { "目标功率档未生效" }
+                    require((after.chargeVal ?: -1) >= 0) { "系统充电参数无效" }
+                    require((after.speedChargeAdd ?: -1) >= 0) { "系统快充参数无效" }
                     after
                 }
             }.getOrElse { error ->
                 restoreOffset(keepSingleSpeed = true)
                 return ControllerStatus(
                     ControllerPhase.ERROR,
-                    "策略校验失败，已恢复默认：${error.message}",
+                    "设置校验失败，已恢复默认：${error.message}",
                 )
             }
             ControllerStatus(
                 phase = ControllerPhase.ACTIVE,
                 message = buildString {
                     append(decision.reason)
-                    append(" · 实际 gear $target")
-                    if (verification == null) append(" · 策略回读为空")
+                    append(" · 目标功率档已生效")
+                    if (verification == null) append(" · 系统状态暂未返回")
                 },
                 desiredGear = target,
                 appliedCosa = desiredCosa,

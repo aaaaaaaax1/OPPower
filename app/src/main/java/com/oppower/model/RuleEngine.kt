@@ -27,7 +27,7 @@ class RuleEngine {
             return RuleDecision(tier, null, "温度达到暂停阈值")
         }
         val gear = targetGear(settings, tier, temperatureC)
-        return RuleDecision(tier, gear, "${tier.label} · gear $gear")
+        return RuleDecision(tier, gear, "${tier.label} · 温度适配")
     }
 
     fun resolveTier(settings: RuntimeSettings, temperatureC: Float): ControlTier {

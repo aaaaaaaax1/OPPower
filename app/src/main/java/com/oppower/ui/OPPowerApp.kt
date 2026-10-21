@@ -86,6 +86,7 @@ fun OPPowerApp(
             onSettingsChange = onSettingsChange,
             onJoinQq = { joinQqGroup(context) },
             onClearHistory = onClearHistory,
+            onRequestShizuku = onRequestShizuku,
         )
     }
 

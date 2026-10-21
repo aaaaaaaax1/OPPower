@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -58,7 +59,7 @@ internal fun ChargeSettingsPage(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Background)
+            .background(Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.48f))))
             .verticalScroll(rememberScrollState())
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -71,7 +72,7 @@ internal fun ChargeSettingsPage(
 
         Surface(
             color = Surface,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(10.dp),
             border = BorderStroke(1.dp, Outline),
         ) {
             Column(Modifier.padding(13.dp)) {
@@ -111,7 +112,7 @@ internal fun ChargeSettingsPage(
 
         Surface(
             color = Surface,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(10.dp),
             border = BorderStroke(1.dp, Outline),
         ) {
             Column(Modifier.padding(12.dp)) {
@@ -278,15 +279,16 @@ internal fun ChargeSettingsPage(
 
 @Composable
 private fun ShizukuCard(state: UiState, onRequestShizuku: () -> Unit) {
-    Surface(color = Surface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, Outline)) {
+    Surface(color = Surface, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, Outline)) {
         Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("系统控制权限", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(
                     when {
-                        !state.shizukuAvailable -> "权限服务未运行"
-                        !state.shizukuPermission -> "等待授权"
-                        else -> "已连接，可自动控制充电"
+                        !state.shizukuInstalled -> "未安装 · 点击打开下载页"
+                        !state.shizukuAvailable -> "未运行 · 点击打开 Shizuku"
+                        !state.shizukuPermission -> "未授权 · 点击授权给 OPPower"
+                        else -> "已授权 OPPower，可自动控制充电"
                     },
                     color = if (state.shizukuAvailable && state.shizukuPermission) Cyan else Amber,
                     fontSize = 10.sp,
@@ -294,7 +296,9 @@ private fun ShizukuCard(state: UiState, onRequestShizuku: () -> Unit) {
                 )
             }
             if (!state.shizukuAvailable || !state.shizukuPermission) {
-                Button(onClick = onRequestShizuku) { Text("去授权", fontSize = 11.sp) }
+                Button(onClick = onRequestShizuku) {
+                    Text(if (!state.shizukuInstalled) "下载" else if (!state.shizukuAvailable) "启动" else "授权", fontSize = 11.sp)
+                }
             }
         }
     }
@@ -305,7 +309,7 @@ private fun BaseTierCard(tier: BaseTier, selected: Boolean, onClick: () -> Unit)
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = if (selected) AccentSurface else Surface,
-        shape = RoundedCornerShape(11.dp),
+        shape = RoundedCornerShape(9.dp),
         border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) Cyan else Outline),
     ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -347,7 +351,7 @@ private fun DefaultRuleCard(settings: RuntimeSettings) {
             "达到 43.0°C" to "暂停快充增强，单速保持开启",
         )
     }
-    Surface(color = Surface, shape = RoundedCornerShape(11.dp), border = BorderStroke(1.dp, Outline)) {
+    Surface(color = Surface, shape = RoundedCornerShape(9.dp), border = BorderStroke(1.dp, Outline)) {
         Column(Modifier.padding(11.dp)) {
             Text("默认策略 · ${settings.baseTier.friendlyLabel}", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             rows.forEach { (range, target) ->
@@ -424,7 +428,7 @@ private fun settingsBaseTier(settings: RuntimeSettings): ControlTier = when (set
 @Composable
 private fun CustomRulePreview(settings: RuntimeSettings) {
     val rules = settings.customRules.temperatureRules.sortedBy { it.threshold }
-    Surface(color = Surface, shape = RoundedCornerShape(11.dp), border = BorderStroke(1.dp, Outline)) {
+    Surface(color = Surface, shape = RoundedCornerShape(9.dp), border = BorderStroke(1.dp, Outline)) {
         Column(Modifier.padding(11.dp)) {
             Text("当前自定义区间", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(

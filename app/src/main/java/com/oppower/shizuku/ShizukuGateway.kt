@@ -2,8 +2,10 @@ package com.oppower.shizuku
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.IBinder
 import com.oppower.BuildConfig
 import rikka.shizuku.Shizuku
@@ -52,6 +54,12 @@ class ShizukuGateway(context: Context) {
     val isAvailable: Boolean
         get() = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
+    val isInstalled: Boolean
+        get() = runCatching {
+            appContext.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
+            true
+        }.getOrDefault(false)
+
     val hasPermission: Boolean
         get() = runCatching {
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
@@ -60,6 +68,27 @@ class ShizukuGateway(context: Context) {
     fun requestPermission() {
         if (!isAvailable || hasPermission) return
         runCatching { Shizuku.requestPermission(1001) }
+    }
+
+    /** Opens the manager so the user can start its service before granting OPPower access. */
+    fun openManager(): Boolean = runCatching {
+        val launchIntent = appContext.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+            ?: return@runCatching false
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        appContext.startActivity(launchIntent)
+        true
+    }.getOrDefault(false)
+
+    /** The app never requests network access; this only hands installation to a browser/store. */
+    fun openInstallPage() {
+        runCatching {
+            appContext.startActivity(
+                Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("https://github.com/RikkaApps/Shizuku/releases/latest"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
     }
 
     fun bind() {
@@ -119,5 +148,9 @@ class ShizukuGateway(context: Context) {
     private fun String.requireAllowedName(): String {
         require(this == "cosa_ctc_value" || this == "single_speed_charge_state")
         return this
+    }
+
+    companion object {
+        const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     }
 }

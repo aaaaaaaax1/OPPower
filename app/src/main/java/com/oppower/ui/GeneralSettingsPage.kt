@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,6 +83,7 @@ internal fun SettingsRouter(
     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
     onJoinQq: () -> Unit,
     onClearHistory: () -> Unit,
+    onRequestShizuku: () -> Unit,
 ) {
     when (screen) {
         SettingsScreen.HOME -> SettingsHomePage(
@@ -89,13 +91,14 @@ internal fun SettingsRouter(
             onBack = onBack,
             onNavigate = onNavigate,
             onJoinQq = onJoinQq,
+            onRequestShizuku = onRequestShizuku,
         )
         SettingsScreen.APPEARANCE -> AppearanceSettingsPage(state, onBack, onSettingsChange)
         SettingsScreen.NOTIFICATIONS -> NotificationSettingsPage(state, onBack, onSettingsChange)
         SettingsScreen.STABLE_OPERATION -> StableOperationPage(state, onBack, onNavigate)
         SettingsScreen.ADVANCED_KEEP_ALIVE -> AdvancedKeepAlivePage(state, onBack, onSettingsChange)
         SettingsScreen.HARDWARE -> HardwareSettingsPage(state, onBack, onSettingsChange)
-        SettingsScreen.SYSTEM -> SystemSettingsPage(state, onBack, onSettingsChange)
+        SettingsScreen.SYSTEM -> SystemSettingsPage(state, onBack, onSettingsChange, onRequestShizuku)
         SettingsScreen.DATA -> DataManagementPage(state, onBack, onSettingsChange, onClearHistory)
         SettingsScreen.FAQ -> FaqPage(onBack)
         SettingsScreen.ABOUT -> AboutPage(onBack, onNavigate, onJoinQq)
@@ -127,6 +130,7 @@ private fun SettingsHomePage(
     onBack: () -> Unit,
     onNavigate: (SettingsScreen) -> Unit,
     onJoinQq: () -> Unit,
+    onRequestShizuku: () -> Unit,
 ) {
     val context = LocalContext.current
     val stableReady = notificationsEnabled(context) && batteryUnrestricted(context)
@@ -136,6 +140,14 @@ private fun SettingsHomePage(
         onBack = onBack,
     ) {
         SettingsSection("常用") {
+            SettingsMenuRow(
+                icon = "S",
+                title = "Shizuku 授权",
+                summary = shizukuStatus(state),
+                accent = !state.shizukuPermission,
+                onClick = onRequestShizuku,
+            )
+            SettingsDivider()
             SettingsMenuRow(
                 icon = "◐",
                 title = "外观设置",
@@ -206,17 +218,17 @@ private fun SettingsHomePage(
             modifier = Modifier.fillMaxWidth().clickable(onClick = onJoinQq),
             color = AccentSurface,
             shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, Cyan.copy(alpha = 0.42f)),
+            border = BorderStroke(1.dp, Outline),
         ) {
             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = Cyan.copy(alpha = 0.16f), shape = CircleShape) {
-                    Text("Q", color = Cyan, fontWeight = FontWeight.Bold, modifier = Modifier.padding(9.dp))
+                Surface(color = SurfaceRaised, shape = RoundedCornerShape(8.dp)) {
+                    Text("Q", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(9.dp))
                 }
                 Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
                     Text("加入 OPPower 用户群", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Text("群号 $QQ_GROUP_NUMBER · 点击复制并打开 QQ", color = TextSecondary, fontSize = 10.sp)
                 }
-                Text("›", color = Cyan, fontSize = 20.sp)
+                Text("›", color = TextSecondary, fontSize = 20.sp)
             }
         }
     }
@@ -365,15 +377,15 @@ private fun NotificationSettingsPage(
             )
             SettingsDivider()
             SettingSwitchRow(
-                title = "充满后关闭状态通知",
-                description = "电量 100% 时移除通知并恢复系统充电策略",
+                title = "充满后精简状态通知",
+                description = "电量 100% 时恢复系统充电策略，并保留一条精简后台通知",
                 checked = settings.notificationAutoCloseOnFull,
                 onCheckedChange = { value -> onSettingsChange { it.copy(notificationAutoCloseOnFull = value) } },
             )
             SettingsDivider()
             SettingSwitchRow(
-                title = "熄屏后关闭状态通知",
-                description = "亮屏后自动恢复通知，快充控制服务继续运行",
+                title = "熄屏后精简状态通知",
+                description = "熄屏时只保留必要后台通知，亮屏后恢复详细数据",
                 checked = settings.notificationAutoCloseOnScreenOff,
                 onCheckedChange = { value -> onSettingsChange { it.copy(notificationAutoCloseOnScreenOff = value) } },
             )
@@ -567,6 +579,7 @@ private fun SystemSettingsPage(
     state: UiState,
     onBack: () -> Unit,
     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
+    onRequestShizuku: () -> Unit,
 ) {
     val context = LocalContext.current
     val batteryOk = batteryUnrestricted(context)
@@ -580,25 +593,29 @@ private fun SystemSettingsPage(
             SettingsDivider()
             SettingActionRow("应用详情", "耗电管理、自启动与权限") { openAppDetails(context) }
             SettingsDivider()
-            SettingActionRow("系统控制权限", if (state.shizukuAvailable && state.shizukuPermission) "已授权" else "未授权") {
-                openAppDetails(context)
-            }
+            SettingActionRow("Shizuku 授权", shizukuStatus(state), onClick = onRequestShizuku)
+            Text(
+                "OPPower 只通过 Shizuku 读取和调整已确认的 ColorOS 充电项目；授权失败时会停止写入并恢复系统默认。",
+                color = TextSecondary,
+                fontSize = 9.sp,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(vertical = 9.dp),
+            )
         }
         SettingsSection("诊断") {
             SettingSwitchRow(
                 title = "调试模式",
-                description = "显示控制阶段、原始电池字段和策略数据来源",
+                description = "显示运行状态、充电阶段与权限状态",
                 checked = state.settings.debugMode,
                 onCheckedChange = { value -> onSettingsChange { it.copy(debugMode = value) } },
             )
             if (state.settings.debugMode) {
                 SettingsDivider(Modifier.padding(vertical = 8.dp))
-                DebugRow("控制阶段", state.controllerStatus.phase.name)
-                DebugRow("当前偏移", state.controllerStatus.appliedCosa.toString())
-                DebugRow("目标档位", state.controllerStatus.desiredGear?.toString() ?: "等待写入")
-                DebugRow("电池状态码", state.battery.status.toString())
-                DebugRow("供电在线", if (state.battery.acOnline) "true" else "false")
-                DebugRow("外部控制权限", if (state.shizukuPermission) "granted" else "missing")
+                DebugRow("当前状态", state.controllerStatus.phase.label)
+                DebugRow("功率档", state.controllerStatus.desiredGear?.let(::friendlyPowerGear) ?: "等待启用")
+                DebugRow("充电状态", if (state.battery.isCharging) "正在充电" else "未在充电")
+                DebugRow("电源接入", if (state.battery.acOnline) "是" else "否")
+                DebugRow("外部控制权限", if (state.shizukuPermission) "已授权" else "未授权")
             }
         }
         SettingsSection("应用") {
@@ -818,7 +835,7 @@ private fun SettingsPage(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Background)
+            .background(Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.48f))))
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -846,7 +863,7 @@ private fun SettingsPage(
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 2.dp))
-        Surface(color = Surface, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Outline)) {
+        Surface(color = Surface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, Outline)) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 2.dp), content = content)
         }
     }
@@ -865,10 +882,10 @@ private fun SettingsMenuRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(32.dp).background(if (accent) AmberSurface else AccentSurface, RoundedCornerShape(10.dp)),
+            Modifier.size(30.dp).background(if (accent) AmberSurface else SurfaceRaised, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(icon, color = if (accent) Amber else Cyan, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text(icon, color = if (accent) Amber else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
         Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
             Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -951,7 +968,7 @@ private fun <T> ChoiceGrid(
                     Surface(
                         modifier = Modifier.weight(1f).clickable { onSelect(option) },
                         color = if (isSelected) AccentSurface else SurfaceRaised,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(8.dp),
                         border = BorderStroke(1.dp, if (isSelected) Cyan else Outline),
                     ) {
                         Text(
@@ -1019,6 +1036,20 @@ private fun hardwareSummary(settings: RuntimeSettings): String {
         settings.absoluteCurrentPowerDisplay,
     ).count { it }
     return if (enabled == 0) "电池读数修正" else "已启用 $enabled 项读数修正"
+}
+
+private fun shizukuStatus(state: UiState): String = when {
+    !state.shizukuInstalled -> "未安装 · 打开下载页"
+    !state.shizukuAvailable -> "未运行 · 打开 Shizuku"
+    !state.shizukuPermission -> "未授权 · 授权给 OPPower"
+    else -> "已授权 OPPower · 服务已连接"
+}
+
+private fun friendlyPowerGear(gear: Int): String = when (gear) {
+    0 -> "最高能力"
+    1, 2 -> "快速充电 · 高功率"
+    3, 4 -> "快速充电 · 均衡"
+    else -> "温和充电"
 }
 
 private fun formatBytes(bytes: Long): String = when {

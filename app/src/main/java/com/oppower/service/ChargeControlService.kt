@@ -111,18 +111,27 @@ class ChargeControlService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_NOTIFICATION_CLOSE_ONCE) {
-            scope.launch { runCatching { controller.restoreAll() } }
-            ChargeControlBus.status.value = ControllerStatus(
-                ControllerPhase.DISABLED,
-                "已临时关闭，重新打开 OPPower 后恢复",
-            )
-            if (foregroundStarted) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                foregroundStarted = false
+            scope.launch {
+                try {
+                    val restored = runCatching { controller.restoreAll() }.getOrElse { error ->
+                        ControllerStatus(
+                            ControllerPhase.ERROR,
+                            "恢复系统默认失败：${error.message ?: error.javaClass.simpleName}",
+                        )
+                    }
+                    ChargeControlBus.status.value = restored
+                } finally {
+                    // Keep the foreground service alive until restoration has completed;
+                    // stopSelf() cancels this scope and could otherwise interrupt it.
+                    if (foregroundStarted) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        foregroundStarted = false
+                    }
+                    lastNotificationText = ""
+                    lastNotificationTitle = ""
+                    stopSelf()
+                }
             }
-            lastNotificationText = ""
-            lastNotificationTitle = ""
-            stopSelf()
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_RESUME_NOTIFICATION) {
@@ -175,23 +184,20 @@ class ChargeControlService : Service() {
         force: Boolean = false,
     ) {
         val full = battery.levelPercent >= 100 || battery.status == 5 || status.phase == ControllerPhase.FULL_PAUSED
-        val shouldShow = !(settings.notificationAutoCloseOnFull && full) &&
+        // A foreground service must keep a visible notification. The two auto-close
+        // settings therefore switch to a compact notification instead of removing it.
+        val detailAllowed = settings.liveNotificationEnabled &&
+            !(settings.notificationAutoCloseOnFull && full) &&
             !(settings.notificationAutoCloseOnScreenOff && !screenOn)
-        if (!shouldShow) {
-            if (foregroundStarted) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                foregroundStarted = false
-            }
-            lastNotificationText = ""
-            lastNotificationTitle = ""
-            return
-        }
-
-        val title = if (settings.liveNotificationEnabled) "OPPower · ${status.phase}" else "OPPower · 后台运行"
-        val text = if (settings.liveNotificationEnabled) {
+        val title = if (detailAllowed) "OPPower · ${phaseLabel(status.phase)}" else "OPPower · 后台保护"
+        val text = if (detailAllowed) {
             notificationText(status.message, battery, settings)
         } else {
-            "充电控制服务正在运行，点击查看详情"
+            if (full) {
+                "已充满 · 充电增强已交还系统 · 点击查看"
+            } else {
+                "亮屏快充保护正在运行 · 点击查看"
+            }
         }
         val now = System.currentTimeMillis()
         val interval = if (screenOn) {
@@ -266,11 +272,17 @@ class ChargeControlService : Service() {
             .setContentTitle(title)
             .setContentText(text.lineSequence().firstOrNull().orEmpty())
             .setStyle(Notification.BigTextStyle().bigText(text))
+            .setSubText(if (battery.acOnline) "电源已接入" else "等待电源接入")
             .setContentIntent(pending)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setProgress(100, battery.levelPercent.coerceIn(0, 100), false)
             .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+                }
                 if (settings.liveNotificationEnabled && settings.notificationCloseOnceEnabled) {
                     addAction(Notification.Action.Builder(null, "本次关闭", closeOnce).build())
                 }
@@ -281,10 +293,20 @@ class ChargeControlService : Service() {
     private fun createChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "亮屏快充状态", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "显示当前快充状态和电池数据"
+                description = "显示亮屏快充状态、电池功率和充电保护"
                 setShowBadge(false)
             },
         )
+    }
+
+    private fun phaseLabel(phase: ControllerPhase): String = when (phase) {
+        ControllerPhase.DISABLED -> "已关闭"
+        ControllerPhase.WAITING_FOR_POWER -> "等待接电"
+        ControllerPhase.ACTIVE -> "快速充电中"
+        ControllerPhase.TEMPERATURE_PAUSED -> "温度保护"
+        ControllerPhase.SOC_PAUSED -> "电量保护"
+        ControllerPhase.FULL_PAUSED -> "已充满"
+        ControllerPhase.ERROR -> "需要检查"
     }
 
     companion object {

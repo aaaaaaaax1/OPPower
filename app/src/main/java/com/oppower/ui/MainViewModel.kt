@@ -31,6 +31,7 @@ data class UiState(
     val points: List<ChartPoint> = emptyList(),
     val chargeRecords: List<ChargeRecord> = emptyList(),
     val dischargeRecords: List<ChargeRecord> = emptyList(),
+    val shizukuInstalled: Boolean = false,
     val shizukuAvailable: Boolean = false,
     val shizukuPermission: Boolean = false,
     val showIntro: Boolean = false,
@@ -46,6 +47,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             settings = store.load(),
             points = historyStore.load(),
             showIntro = !store.introSeen(),
+            shizukuInstalled = shizuku.isInstalled,
             shizukuAvailable = shizuku.isAvailable,
             shizukuPermission = shizuku.hasPermission,
         ),
@@ -78,6 +80,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     dischargeRecords = if (completed?.first == false) {
                         (mutable.value.dischargeRecords + completed.second).takeLast(10)
                     } else mutable.value.dischargeRecords,
+                    shizukuInstalled = shizuku.isInstalled,
                     shizukuAvailable = shizuku.isAvailable,
                     shizukuPermission = shizuku.hasPermission,
                 )
@@ -103,13 +106,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ChargeControlBus.requestUpdate()
             return
         }
-        shizuku.requestPermission()
+        if (!shizuku.isAvailable) {
+            if (!shizuku.openManager()) shizuku.openInstallPage()
+        } else {
+            shizuku.requestPermission()
+        }
+        refreshShizukuState()
     }
 
     fun onShizukuPermissionGranted() {
         shizuku.bind()
-        mutable.value = mutable.value.copy(shizukuPermission = shizuku.hasPermission)
+        refreshShizukuState()
         ChargeControlBus.requestUpdate()
+    }
+
+    fun refreshShizukuState() {
+        mutable.value = mutable.value.copy(
+            shizukuInstalled = shizuku.isInstalled,
+            shizukuAvailable = shizuku.isAvailable,
+            shizukuPermission = shizuku.hasPermission,
+        )
     }
 
     fun restoreAll() {

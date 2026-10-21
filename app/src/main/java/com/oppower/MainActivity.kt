@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oppower.service.ChargeControlService
 import com.oppower.ui.MainViewModel
@@ -27,12 +28,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setTaskExclusion()
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         Shizuku.addRequestPermissionResultListener(permissionListener)
         ChargeControlService.resumeNotification(this)
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
+            LaunchedEffect(state.settings.hideFromRecents) {
+                setTaskExclusion(state.settings.hideFromRecents)
+            }
             OPPowerTheme(state.settings) {
                 OPPowerApp(
                     state = state,
@@ -51,8 +54,12 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun setTaskExclusion() {
-        val excluded = com.oppower.data.PreferencesStore(this).load().hideFromRecents
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshShizukuState()
+    }
+
+    private fun setTaskExclusion(excluded: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             setRecentsScreenshotEnabled(!excluded)
         }

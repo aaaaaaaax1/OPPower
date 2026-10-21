@@ -3,6 +3,7 @@ package com.oppower.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -62,7 +64,7 @@ internal fun MainPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Background)
+            .background(Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.54f))))
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
@@ -74,7 +76,7 @@ internal fun MainPage(
             }
             Text(
                 text = "加入 QQ 群",
-                color = Amber,
+                color = TextSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
@@ -158,21 +160,29 @@ internal fun MainPage(
 
 @Composable
 private fun SectionHeader(title: String, trailing: String) {
-    Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+    Row(Modifier.fillMaxWidth().padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(2.dp).height(15.dp).background(Cyan.copy(alpha = 0.75f), RoundedCornerShape(2.dp)))
+        Text(
+            title,
+            color = TextPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f).padding(start = 7.dp),
+        )
         Text(trailing, color = TextSecondary, fontSize = 9.sp)
     }
 }
 
 @Composable
 private fun PowerHero(state: UiState) {
-    val shape = RoundedCornerShape(17.dp)
+    val shape = RoundedCornerShape(14.dp)
     val battery = state.battery
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = Surface,
-        shape = shape,
-        border = BorderStroke(1.dp, Outline),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Brush.linearGradient(listOf(AccentSurface.copy(alpha = 0.92f), Surface)))
+            .border(1.dp, Outline.copy(alpha = 0.95f), shape),
     ) {
         Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -207,7 +217,7 @@ private fun PowerHero(state: UiState) {
                         .padding(horizontal = 10.dp)
                         .height(5.dp)
                         .clip(RoundedCornerShape(99.dp))
-                        .background(Color(0xFF2B393E)),
+                        .background(Outline),
                 ) {
                     Box(
                         Modifier
@@ -232,10 +242,11 @@ private fun Metric(
     Surface(
         modifier = modifier,
         color = Surface,
-        shape = RoundedCornerShape(11.dp),
+        shape = RoundedCornerShape(9.dp),
         border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(horizontal = 9.dp, vertical = 8.dp)) {
+            Box(Modifier.width(18.dp).height(2.dp).background(Cyan.copy(alpha = 0.72f), RoundedCornerShape(2.dp)))
             Text(label, color = TextSecondary, fontSize = 9.sp)
             Text(
                 value,
@@ -253,7 +264,7 @@ private fun ActionTile(label: String, value: String, modifier: Modifier) {
     Surface(
         modifier = modifier,
         color = Surface,
-        shape = RoundedCornerShape(9.dp),
+        shape = RoundedCornerShape(8.dp),
         border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(horizontal = 6.dp, vertical = 8.dp)) {
@@ -269,11 +280,19 @@ private fun ForceChargeCard(
     onOpenSettings: () -> Unit,
     onToggle: (Boolean) -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = Surface,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Outline),
+    val shape = RoundedCornerShape(12.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(
+                if (state.settings.masterEnabled) {
+                    Brush.linearGradient(listOf(AccentSurface, Surface))
+                } else {
+                    Brush.linearGradient(listOf(SurfaceRaised, Surface))
+                },
+            )
+            .border(1.dp, if (state.settings.masterEnabled) Cyan.copy(alpha = 0.34f) else Outline, shape),
     ) {
         Column(Modifier.padding(13.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -335,7 +354,7 @@ private fun RecordCard(
     Surface(
         modifier = modifier,
         color = Surface,
-        shape = RoundedCornerShape(11.dp),
+        shape = RoundedCornerShape(9.dp),
         border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(10.dp)) {
