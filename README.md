@@ -1,0 +1,46 @@
+# OPPower
+
+OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制器。它通过 Shizuku 执行受限的 `settings` 命令，维持 `cosa_ctc_value` 热控偏移，并提供功率、温度、电量监测和本地充放电趋势。
+
+> 当前仓库包含设计书和可编译源码。根据项目当前阶段要求，尚未生成或提交 APK。
+
+## 功能
+
+- 最大输出、20–40 W、10–30 W 三个基础功率档。
+- 默认温度与电量保护规则，可切换为自定义温度节点和目标档位。
+- 插电自动校准、拔电恢复、达到 80% 电量暂停 gear 策略、充满后关闭单速。
+- 前台服务保持控制；划掉界面后仍可执行控制。
+- 电流、电压、温度、电量和真实时间功率/温度曲线。
+- Shizuku 命令白名单和写入回读校验。
+- 首次启动说明，以及 QQ 群号复制和邀请链接。
+
+## 使用条件
+
+- 设备：realme Neo8 RMX8899，ColorOS 17。其他机型或固件未验证。
+- 必须安装并启动 Shizuku，授权本应用访问 Shizuku。
+- 需要真实亮屏，保持原生热保护运行。
+- 系统电池功率是趋势数据；最终功率以外部功率计为准。
+
+## 构建
+
+项目使用 JDK 17、Android SDK 35 和 Gradle 8.13。请把构建工具安装在仓库之外，不提交 SDK、JDK、Gradle 发行包、`.gradle`、`build` 或 `local.properties`。
+
+```powershell
+./gradlew.bat :app:compileDebugKotlin
+./gradlew.bat :app:testDebugUnitTest
+```
+
+APK 构建任务为 `:app:assembleDebug` 或 `:app:assembleRelease`。当前阶段不执行这些任务。
+
+## 文档
+
+- [设计与运行规范](docs/DESIGN.md)
+- [真机标定与验证记录](docs/VALIDATION.md)
+
+## 隐私
+
+应用没有网络权限，不上传电池、充电或使用记录。数据保存在本机，用于界面状态、规则执行和本次会话趋势。
+
+## 许可与来源
+
+本项目在交互与功能方向上参考 LLPower，独立实现 Android 工程。首次启动界面会说明这一来源。发布前请补充与最终代码、资源和第三方依赖相符的许可证文件。

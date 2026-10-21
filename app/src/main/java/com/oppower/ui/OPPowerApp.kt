@@ -1,0 +1,112 @@
+package com.oppower.ui
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.oppower.model.RuntimeSettings
+
+private enum class Page {
+    MAIN,
+    CHARGE_SETTINGS,
+    GENERAL_SETTINGS,
+}
+
+@Composable
+fun OPPowerApp(
+    state: UiState,
+    onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
+    onRequestShizuku: () -> Unit,
+    onRestore: () -> Unit,
+    onDismissIntro: () -> Unit,
+) {
+    var page by rememberSaveable { mutableStateOf(Page.MAIN) }
+    val context = LocalContext.current
+
+    BackHandler(enabled = page != Page.MAIN) { page = Page.MAIN }
+
+    when (page) {
+        Page.MAIN -> MainPage(
+            state = state,
+            onOpenChargeSettings = { page = Page.CHARGE_SETTINGS },
+            onOpenSettings = { page = Page.GENERAL_SETTINGS },
+            onRequestShizuku = onRequestShizuku,
+            onSettingsChange = onSettingsChange,
+            onJoinQq = { joinQqGroup(context) },
+        )
+
+        Page.CHARGE_SETTINGS -> ChargeSettingsPage(
+            state = state,
+            onBack = { page = Page.MAIN },
+            onSettingsChange = onSettingsChange,
+            onRestore = onRestore,
+            onRequestShizuku = onRequestShizuku,
+        )
+
+        Page.GENERAL_SETTINGS -> GeneralSettingsPage(
+            state = state,
+            onBack = { page = Page.MAIN },
+            onSettingsChange = onSettingsChange,
+            onJoinQq = { joinQqGroup(context) },
+        )
+    }
+
+    if (state.showIntro) {
+        FirstRunDialog(
+            onDismiss = onDismissIntro,
+            onJoinQq = { joinQqGroup(context) },
+        )
+    }
+}
+
+@Composable
+private fun FirstRunDialog(onDismiss: () -> Unit, onJoinQq: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("关于 OPPower") },
+        text = {
+            Column {
+                Text(
+                    "本项目基于 LLPower 二改得来，增加了 ColorOS 亮屏快充功能。",
+                    color = TextSecondary,
+                    fontSize = 15.sp,
+                    lineHeight = 23.sp,
+                )
+                Row(Modifier.padding(top = 14.dp)) {
+                    Text("大家感兴趣的可以加群：", color = TextSecondary, fontSize = 15.sp)
+                    Text(
+                        QQ_GROUP_NUMBER,
+                        color = Amber,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        modifier = Modifier.clickable(onClick = onJoinQq).padding(horizontal = 2.dp),
+                    )
+                }
+                Text(
+                    "点击群号可复制并尝试打开 QQ 加入群聊。有任何问题可在群内反馈。",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("知道了") }
+        },
+    )
+}
