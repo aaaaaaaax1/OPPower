@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import com.oppower.model.ChartPoint
 import com.oppower.model.ControllerPhase
 import com.oppower.model.RuntimeSettings
+import com.oppower.model.friendlyLabel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,7 +84,7 @@ internal fun MainPage(
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = SurfaceRaised,
-                border = BorderStroke(1.dp, Color(0xFF34484E)),
+                border = BorderStroke(1.dp, Outline),
                 modifier = Modifier.clickable(onClick = onOpenSettings),
             ) {
                 Text(
@@ -113,7 +114,7 @@ internal fun MainPage(
             ActionTile("实时通知", if (state.settings.liveNotificationEnabled) "已开启" else "已关闭", Modifier.weight(1f))
         }
 
-        Text("快捷控制", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        SectionHeader("快捷控制", "接电后自动开始")
         ForceChargeCard(
             state = state,
             onOpenSettings = onOpenChargeSettings,
@@ -121,25 +122,45 @@ internal fun MainPage(
                 onSettingsChange { it.copy(masterEnabled = enabled) }
             },
         )
+
+        SectionHeader("权限与运行", state.controllerStatus.phase.label)
         if (!state.shizukuAvailable || !state.shizukuPermission) {
             Button(onClick = onRequestShizuku, modifier = Modifier.fillMaxWidth()) {
-                Text(if (!state.shizukuAvailable) "启动 Shizuku 后授权" else "授权 Shizuku")
+                Text(if (!state.shizukuAvailable) "启动权限服务后授权" else "授权系统控制权限")
             }
         }
 
-        Text("充放电记录", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        SessionRecords(state.points, state.chargeRecords, state.dischargeRecords)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("实时曲线", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            Text("保留最近 24 小时", color = TextSecondary, fontSize = 9.sp)
+        if (state.controllerStatus.phase == ControllerPhase.ERROR) {
+            Surface(
+                color = AmberSurface,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, Color(0xFF4A3E28)),
+            ) {
+                Column(Modifier.padding(11.dp)) {
+                    Text("当前设置未完全生效", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(state.controllerStatus.message, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+            }
         }
+
+        SectionHeader("充放电记录", "保存在本机")
+        SessionRecords(state.points, state.chargeRecords, state.dischargeRecords)
+        SectionHeader("实时曲线", "两张图可独立拖动")
         RealtimeCharts(state.points)
         Text(
-            "功率和温度来自手机电池接口，仅用于趋势判断；实际输入功率以外部功率计为准。",
+            "图表用于观察趋势；实际输入功率以外部功率计为准。",
             color = TextSecondary,
             fontSize = 9.sp,
         )
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, trailing: String) {
+    Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Text(trailing, color = TextSecondary, fontSize = 9.sp)
     }
 }
 
@@ -151,11 +172,11 @@ private fun PowerHero(state: UiState) {
         modifier = Modifier.fillMaxWidth(),
         color = Surface,
         shape = shape,
-        border = BorderStroke(1.dp, Color(0xFF2B3A40)),
+        border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = Color(0xFF1A2C2B), shape = RoundedCornerShape(99.dp)) {
+                Surface(color = AccentSurface, shape = RoundedCornerShape(99.dp)) {
                     Row(
                         Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -186,13 +207,13 @@ private fun PowerHero(state: UiState) {
                         .padding(horizontal = 10.dp)
                         .height(5.dp)
                         .clip(RoundedCornerShape(99.dp))
-                        .background(Color(0xFF304149)),
+                        .background(Color(0xFF2B393E)),
                 ) {
                     Box(
                         Modifier
                             .fillMaxWidth((battery.levelPercent / 100f).coerceIn(0f, 1f))
                             .height(5.dp)
-                            .background(Color(0xFF73C9B5), RoundedCornerShape(99.dp)),
+                            .background(Cyan, RoundedCornerShape(99.dp)),
                     )
                 }
                 Text("${battery.temperatureC.oneDecimal()}°C", color = TextSecondary, fontSize = 10.sp)
@@ -212,7 +233,7 @@ private fun Metric(
         modifier = modifier,
         color = Surface,
         shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(1.dp, Color(0xFF2A3B40)),
+        border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(horizontal = 9.dp, vertical = 8.dp)) {
             Text(label, color = TextSecondary, fontSize = 9.sp)
@@ -233,7 +254,7 @@ private fun ActionTile(label: String, value: String, modifier: Modifier) {
         modifier = modifier,
         color = Surface,
         shape = RoundedCornerShape(9.dp),
-        border = BorderStroke(1.dp, Color(0xFF2A3B40)),
+        border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(horizontal = 6.dp, vertical = 8.dp)) {
             Text(label, color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Medium)
@@ -252,14 +273,14 @@ private fun ForceChargeCard(
         modifier = Modifier.fillMaxWidth(),
         color = Surface,
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Color(0xFF2B3A40)),
+        border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(13.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("强制亮屏快充", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Text(
-                        "基础档：${state.settings.baseTier.label} · ${if (state.settings.customRulesEnabled) "自定义规则" else "默认规则"}",
+                        "基础档：${state.settings.baseTier.friendlyLabel} · ${if (state.settings.customRulesEnabled) "自定义规则" else "默认规则"}",
                         color = TextSecondary,
                         fontSize = 10.sp,
                         modifier = Modifier.padding(top = 3.dp),
@@ -285,9 +306,9 @@ private fun ForceChargeCard(
 private fun defaultSummary(settings: RuntimeSettings): String {
     return if (settings.customRulesEnabled) {
         "自定义：${settings.customRules.temperatureRules.size} 个温度节点 · ${settings.customRules.socStopPercent}% 暂停"
-    } else when (settings.baseTier.label) {
-        "最大输出" -> "41°C→20–40W · 42°C→10–30W · 43°C/80%暂停 · 100%关单速"
-        else -> "低于 43°C 按温度内部降档 · 43°C/80%暂停 · 100%关单速"
+    } else when (settings.baseTier) {
+        com.oppower.model.BaseTier.MAX_OUTPUT -> "41°C→20–40W · 42°C→10–30W · 43°C/80%暂停 · 充满关单速"
+        else -> "低于 43°C 随温度调整 · 43°C/80%暂停 · 充满关单速"
     }
 }
 
@@ -315,7 +336,7 @@ private fun RecordCard(
         modifier = modifier,
         color = Surface,
         shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(1.dp, Color(0xFF2A3B40)),
+        border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.padding(10.dp)) {
             Text(title, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -373,50 +394,53 @@ private fun RecordCard(
 private fun RealtimeCharts(points: List<ChartPoint>) {
     val now = System.currentTimeMillis()
     val windowMillis = 2L * 60L * 60L * 1_000L
-    var endFraction by remember { mutableFloatStateOf(1f) }
+    var powerEndFraction by remember { mutableFloatStateOf(1f) }
+    var temperatureEndFraction by remember { mutableFloatStateOf(1f) }
     val firstMillis = points.firstOrNull()?.epochMillis ?: now
     val lastMillis = points.lastOrNull()?.epochMillis ?: now
     val availableRange = (lastMillis - firstMillis - windowMillis).coerceAtLeast(0L)
-    val windowStart = firstMillis + availableRange * endFraction.coerceIn(0f, 1f)
-    val windowEnd = windowStart + windowMillis
-    val visiblePoints = points.filter { it.epochMillis in windowStart.toLong()..windowEnd.toLong() }
-    val peakPower = visiblePoints.maxOfOrNull { it.powerW } ?: 5f
+    val powerWindowStart = firstMillis + availableRange * powerEndFraction.coerceIn(0f, 1f)
+    val powerVisiblePoints = points.filter { it.epochMillis in powerWindowStart.toLong()..(powerWindowStart + windowMillis).toLong() }
+    val peakPower = powerVisiblePoints.maxOfOrNull { it.powerW } ?: 5f
     val powerMax = (Math.ceil(peakPower / 10.0).toFloat() * 10f).coerceAtLeast(10f)
-    val temps = visiblePoints.map { it.temperatureC }
+    val temperatureWindowStart = firstMillis + availableRange * temperatureEndFraction.coerceIn(0f, 1f)
+    val temperatureVisiblePoints = points.filter { it.epochMillis in temperatureWindowStart.toLong()..(temperatureWindowStart + windowMillis).toLong() }
+    val temps = temperatureVisiblePoints.map { it.temperatureC }
     val tempMin = (temps.minOrNull() ?: 30f).coerceAtMost(40f)
     val tempMax = max(tempMin + 1f, temps.maxOrNull() ?: 42f)
-    val onDrag: (Float) -> Unit = { dragAmount ->
-        endFraction = (endFraction - dragAmount).coerceIn(0f, 1f)
-    }
 
     Text("功率曲线", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     ChartCard(
         title = "实时功率",
         unit = "W",
         color = Cyan,
-        points = visiblePoints,
-        windowStart = windowStart.toLong(),
+        points = powerVisiblePoints,
+        windowStart = powerWindowStart.toLong(),
         windowMillis = windowMillis,
         minimumY = 0f,
         maximumY = powerMax,
         value = { it.powerW },
-        onDrag = onDrag,
+        onDrag = { dragAmount ->
+            powerEndFraction = (powerEndFraction - dragAmount).coerceIn(0f, 1f)
+        },
     )
     Text("温度曲线", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp))
     ChartCard(
         title = "电池温度",
         unit = "°C",
         color = Amber,
-        points = visiblePoints,
-        windowStart = windowStart.toLong(),
+        points = temperatureVisiblePoints,
+        windowStart = temperatureWindowStart.toLong(),
         windowMillis = windowMillis,
         minimumY = tempMin,
         maximumY = tempMax,
         value = { it.temperatureC },
-        onDrag = onDrag,
+        onDrag = { dragAmount ->
+            temperatureEndFraction = (temperatureEndFraction - dragAmount).coerceIn(0f, 1f)
+        },
     )
     Text(
-        "两张图共用时间窗口 · 每 15 分钟一个时间节点 · 左右拖动查看最近 24 小时",
+        "记录最近 24 小时 · 每次显示 2 小时 · 左右拖动分别查看 · 每 15 分钟一个时间节点",
         color = TextSecondary,
         fontSize = 8.sp,
         modifier = Modifier.padding(top = 2.dp),
@@ -439,12 +463,12 @@ private fun ChartCard(
     Surface(
         color = Surface,
         shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(1.dp, Color(0xFF2A3B40)),
+        border = BorderStroke(1.dp, Outline),
     ) {
         Column(Modifier.fillMaxWidth().padding(9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("2 小时窗口", color = TextSecondary, fontSize = 8.sp)
+                Text("2 小时视图 · 可拖动", color = TextSecondary, fontSize = 8.sp)
             }
             Box(
                 Modifier
@@ -463,7 +487,7 @@ private fun ChartCard(
                     val span = (maximumY - minimumY).coerceAtLeast(1f)
                     repeat(5) { index ->
                         val y = bottom * index / 4f
-                        drawLine(Color(0xFF2A3B40), Offset(0f, y), Offset(right, y), 1f)
+                        drawLine(Outline, Offset(0f, y), Offset(right, y), 1f)
                     }
                     if (points.size >= 2) {
                         val path = Path()

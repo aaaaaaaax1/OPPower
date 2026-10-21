@@ -60,7 +60,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             while (true) {
-                val battery = reader.snapshot()
+                val battery = reader.snapshot(mutable.value.settings)
                 val previous = mutable.value.points.lastOrNull()
                 val points = mutable.value.points.ifEmpty { historyStore.load() }
                 val completed = if (previous != null && previous.acOnline != battery.acOnline) {
@@ -87,9 +87,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSettings(transform: (RuntimeSettings) -> RuntimeSettings) {
-        val updated = transform(mutable.value.settings).sanitized()
+        val oldSettings = mutable.value.settings
+        val updated = transform(oldSettings).sanitized()
         store.save(updated)
         mutable.value = mutable.value.copy(settings = updated)
+        if (updated.historyEnabled != oldSettings.historyEnabled) {
+            ChargeControlService.historySettingsChanged(getApplication())
+        }
         ChargeControlBus.requestUpdate()
     }
 
@@ -111,6 +115,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun restoreAll() {
         updateSettings { it.copy(masterEnabled = false) }
         ChargeControlService.restore(getApplication())
+    }
+
+    fun clearHistory() {
+        historyStore.clear()
+        ChartHistoryBus.points.value = emptyList()
+        mutable.value = mutable.value.copy(
+            points = emptyList(),
+            chargeRecords = emptyList(),
+            dischargeRecords = emptyList(),
+        )
     }
 
     fun dismissIntro() {

@@ -44,6 +44,10 @@ class ChartHistoryStore(context: Context) {
             updated
         }
 
+    fun clear() = synchronized(LOCK) {
+        file.delete()
+    }
+
     private fun writeAtomically(content: String) {
         val temporary = File(file.parentFile, "$FILE_NAME.tmp")
         temporary.writeText(content)

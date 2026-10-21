@@ -37,6 +37,8 @@ gear 0 是全局策略下的系统最高输出档，本次没有作为功率区�
 
 - `:app:compileDebugKotlin` 通过。
 - `:app:testDebugUnitTest` 通过，覆盖默认温度档、SOC 暂停、100%/FULL、禁止更高温反向升档、均衡档内部 gear、Shizuku 命令白名单和 24 小时曲线记录序列化。
+- `:app:lintDebug` 通过，0 error；保留依赖版本、备份规则、SDK 版本检查和 KTX 建议等非阻断 warning。
+- 设置多级页面、主题与比例、通知内容/频率、硬件修正、诊断字段、数据管理、悬浮窗与无障碍保活已接入源码。
 - 未执行 `:app:assembleDebug` 或 `:app:assembleRelease`。
 - 未安装到真机，尚未验证 Shizuku user service、前台服务保活和实际外接功率。
 

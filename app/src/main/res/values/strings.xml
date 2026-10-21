@@ -1,4 +1,6 @@
 <resources>
     <color name="launcher_background">#0B1115</color>
     <string name="app_name">OPPower</string>
+    <string name="accessibility_keep_alive_label">OPPower 后台保活</string>
+    <string name="accessibility_keep_alive_description">仅用于维持充电控制后台服务，不读取屏幕内容，也不执行自动点击。</string>
 </resources>

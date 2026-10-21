@@ -10,7 +10,7 @@ class BootReceiver : BroadcastReceiver() {
         val shouldStart = when (intent?.action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
-            -> PreferencesStore(context).load().masterEnabled
+            -> PreferencesStore(context).load().let { it.masterEnabled && it.resumeAfterReboot }
             else -> false
         }
         if (shouldStart) {

@@ -23,7 +23,7 @@ import com.oppower.model.RuntimeSettings
 private enum class Page {
     MAIN,
     CHARGE_SETTINGS,
-    GENERAL_SETTINGS,
+    SETTINGS,
 }
 
 @Composable
@@ -33,17 +33,32 @@ fun OPPowerApp(
     onRequestShizuku: () -> Unit,
     onRestore: () -> Unit,
     onDismissIntro: () -> Unit,
+    onClearHistory: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
+    var settingsScreen by rememberSaveable { mutableStateOf(SettingsScreen.HOME) }
     val context = LocalContext.current
 
-    BackHandler(enabled = page != Page.MAIN) { page = Page.MAIN }
+    BackHandler(enabled = page != Page.MAIN) {
+        when (page) {
+            Page.MAIN -> Unit
+            Page.CHARGE_SETTINGS -> page = Page.MAIN
+            Page.SETTINGS -> if (settingsScreen == SettingsScreen.HOME) {
+                page = Page.MAIN
+            } else {
+                settingsScreen = if (settingsScreen.isAboutChild()) SettingsScreen.ABOUT else SettingsScreen.HOME
+            }
+        }
+    }
 
     when (page) {
         Page.MAIN -> MainPage(
             state = state,
             onOpenChargeSettings = { page = Page.CHARGE_SETTINGS },
-            onOpenSettings = { page = Page.GENERAL_SETTINGS },
+            onOpenSettings = {
+                settingsScreen = SettingsScreen.HOME
+                page = Page.SETTINGS
+            },
             onRequestShizuku = onRequestShizuku,
             onSettingsChange = onSettingsChange,
             onJoinQq = { joinQqGroup(context) },
@@ -57,11 +72,20 @@ fun OPPowerApp(
             onRequestShizuku = onRequestShizuku,
         )
 
-        Page.GENERAL_SETTINGS -> GeneralSettingsPage(
+        Page.SETTINGS -> SettingsRouter(
+            screen = settingsScreen,
             state = state,
-            onBack = { page = Page.MAIN },
+            onNavigate = { settingsScreen = it },
+            onBack = {
+                if (settingsScreen == SettingsScreen.HOME) {
+                    page = Page.MAIN
+                } else {
+                    settingsScreen = if (settingsScreen.isAboutChild()) SettingsScreen.ABOUT else SettingsScreen.HOME
+                }
+            },
             onSettingsChange = onSettingsChange,
             onJoinQq = { joinQqGroup(context) },
+            onClearHistory = onClearHistory,
         )
     }
 
@@ -71,6 +95,14 @@ fun OPPowerApp(
             onJoinQq = { joinQqGroup(context) },
         )
     }
+}
+
+private fun SettingsScreen.isAboutChild(): Boolean = when (this) {
+    SettingsScreen.IMPORTANT_NOTICE,
+    SettingsScreen.DEVELOPER_NOTICE,
+    SettingsScreen.LICENSES,
+    -> true
+    else -> false
 }
 
 @Composable

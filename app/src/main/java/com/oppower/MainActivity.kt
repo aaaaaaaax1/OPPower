@@ -1,6 +1,7 @@
 package com.oppower
 
 import android.Manifest
+import android.app.ActivityManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -9,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.oppower.service.ChargeControlService
 import com.oppower.ui.MainViewModel
 import com.oppower.ui.OPPowerApp
 import com.oppower.ui.OPPowerTheme
@@ -25,17 +27,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setTaskExclusion()
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         Shizuku.addRequestPermissionResultListener(permissionListener)
+        ChargeControlService.resumeNotification(this)
         setContent {
-            OPPowerTheme {
-                val state by viewModel.state.collectAsStateWithLifecycle()
+            val state by viewModel.state.collectAsStateWithLifecycle()
+            OPPowerTheme(state.settings) {
                 OPPowerApp(
                     state = state,
                     onSettingsChange = viewModel::updateSettings,
                     onRequestShizuku = viewModel::requestShizukuPermission,
                     onRestore = viewModel::restoreAll,
                     onDismissIntro = viewModel::dismissIntro,
+                    onClearHistory = viewModel::clearHistory,
                 )
             }
         }
@@ -44,5 +49,14 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         Shizuku.removeRequestPermissionResultListener(permissionListener)
         super.onDestroy()
+    }
+
+    private fun setTaskExclusion() {
+        val excluded = com.oppower.data.PreferencesStore(this).load().hideFromRecents
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setRecentsScreenshotEnabled(!excluded)
+        }
+        getSystemService(ActivityManager::class.java).appTasks.firstOrNull()
+            ?.setExcludeFromRecents(excluded)
     }
 }
