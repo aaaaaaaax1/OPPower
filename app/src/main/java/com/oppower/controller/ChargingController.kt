@@ -3,6 +3,7 @@ package com.oppower.controller
 import com.oppower.model.BatterySnapshot
 import com.oppower.model.ControllerPhase
 import com.oppower.model.ControllerStatus
+import com.oppower.model.ControlTier
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.RuleEngine
 import com.oppower.model.ThermalPolicy
@@ -17,11 +18,19 @@ class ChargingController(
     private var lastFull = false
     private var currentCosa = 0
     private var cosaInitialized = false
-    private var singleSpeedState: Int? = null
     private var appliedGear: Int? = null
     private var pendingGear: Int? = null
     private var pendingSince = 0L
     private var lastAppliedAt = 0L
+    private var lastConfirmedGear: Int? = null
+    private var lastUserRequestedGear: Int? = null
+    private var confirmedBaseGear: Int? = null
+    private var lastObservedGear: Int? = null
+    private var deviationSince = 0L
+    private var rapidSwitchWindowUntil = 0L
+    private var appliedTier: ControlTier? = null
+    private var temperatureCandidateGear: Int? = null
+    private var temperatureCandidateSince = 0L
 
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
@@ -54,21 +63,22 @@ class ChargingController(
             if (full) {
                 restoreBoth()
                 lastFull = true
-                return ControllerStatus(ControllerPhase.FULL_PAUSED, "电量已充满：已恢复系统默认并关闭快充保持")
+                return ControllerStatus(ControllerPhase.FULL_PAUSED, "电量已充满：已恢复系统默认")
             }
             if (lastFull) {
                 restoreBoth()
                 return ControllerStatus(ControllerPhase.FULL_PAUSED, "本次插电已充满，拔电后重新开始")
             }
 
-            if (battery.levelPercent >= settings.customRules.socStopPercent) {
+            val pauseSoc = rules.socPauseThreshold(settings)
+            if (battery.levelPercent >= pauseSoc) {
                 sessionSocLocked = true
             }
             if (sessionSocLocked) {
-                restoreOffset(keepSingleSpeed = true)
+                restoreBoth()
                 return ControllerStatus(
                     ControllerPhase.SOC_PAUSED,
-                    "电量达到 ${settings.customRules.socStopPercent}%：本次插电已暂停快充增强",
+                    "电量达到 $pauseSoc%：本次插电已暂停快充增强",
                     sessionSocLocked = true,
                 )
             }
@@ -82,74 +92,165 @@ class ChargingController(
             )
             val requested = decision.targetGear
             if (requested == null) {
-                restoreOffset(keepSingleSpeed = true)
+                lastUserRequestedGear = null
+                restoreBoth()
                 return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
             }
 
-            val target = confirmGear(requested, settings)
+            val target = confirmGear(requested, settings, decision.tier)
             if (target == null) {
+                val debouncing = pendingGear == requested &&
+                    System.currentTimeMillis() - pendingSince < SETTINGS_DEBOUNCE_MS
                 return ControllerStatus(
                     ControllerPhase.ACTIVE,
-                    "等待 ${if (requested > (appliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
-                    desiredGear = appliedGear,
+                    if (debouncing) {
+                        "等待最新档位 · 停止操作 3 秒后校准"
+                    } else {
+                        "等待 ${if (requested > (appliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}"
+                    },
+                    desiredGear = requested,
                     appliedCosa = currentCosa,
+                    observedGear = lastConfirmedGear,
                 )
             }
 
             val policy = readPolicy()
             if (!policy.isParsed) {
-                restoreOffset(keepSingleSpeed = true)
-                return ControllerStatus(ControllerPhase.ERROR, "系统充电状态无法确认，已恢复默认")
-            }
-            val baseGear = (policy.gear ?: 0) - currentCosa
-            val desiredCosa = target - baseGear
-            if (desiredCosa !in -9..9) {
-                restoreOffset(keepSingleSpeed = true)
-                return ControllerStatus(ControllerPhase.ERROR, "目标档位超出安全范围，已恢复默认")
-            }
-
-            writeCosa(desiredCosa)
-            setSingleSpeed(1)
-            appliedGear = target
-            lastAppliedAt = System.currentTimeMillis()
-            val verification = runCatching<ThermalPolicy?> {
-                val after = readPolicy()
-                if (!after.isParsed) {
-                    // gear 1 is known to return an empty policy on this firmware. The
-                    // measured power remains the acceptance signal, while cosa itself
-                    // was already checked for readback above.
-                    if (target == 1) {
-                        null
-                    } else {
-                    error("系统充电状态为空")
-                    }
-                } else {
-                    require(after.gear == target) { "目标功率档未生效" }
-                    require((after.chargeVal ?: -1) >= 0) { "系统充电参数无效" }
-                    require((after.speedChargeAdd ?: -1) >= 0) { "系统快充参数无效" }
-                    after
+                if (appliedGear == requested || (target == 1 && currentCosa != 0)) {
+                    return ControllerStatus(
+                        ControllerPhase.ACTIVE,
+                        "目标功率档正在生效 · 系统状态暂未返回",
+                        desiredGear = target,
+                        appliedCosa = currentCosa,
+                        observedGear = null,
+                    )
                 }
-            }.getOrElse { error ->
-                restoreOffset(keepSingleSpeed = true)
                 return ControllerStatus(
                     ControllerPhase.ERROR,
-                    "设置校验失败，已恢复默认：${error.message}",
+                    "系统充电状态暂未返回 · 保持当前设置并继续跟踪",
+                    desiredGear = target,
+                    appliedCosa = currentCosa,
+                    observedGear = null,
                 )
             }
-            ControllerStatus(
-                phase = ControllerPhase.ACTIVE,
-                message = buildString {
-                    append(decision.reason)
-                    append(" · 目标功率档已生效")
-                    if (verification == null) append(" · 系统状态暂未返回")
-                },
-                desiredGear = target,
-                appliedCosa = desiredCosa,
+            val observedGear = policy.gear
+                ?: return ControllerStatus(
+                    ControllerPhase.ERROR,
+                    "系统充电状态无法确认，请稍后重试",
+                    desiredGear = target,
+                    appliedCosa = currentCosa,
+                )
+            // Keep the last confirmed base and current cosa as the reference. A
+            // transient system readback change is not allowed to redefine either.
+            val baseGear = confirmedBaseGear
+                ?: (observedGear - currentCosa).also { confirmedBaseGear = it }
+            val desiredCosa = target - baseGear
+            if (desiredCosa !in -9..9) {
+                return ControllerStatus(
+                    ControllerPhase.ACTIVE,
+                    "当前充电策略暂未满足所选档位 · 保持现有设置并继续跟踪",
+                    desiredGear = target,
+                    appliedCosa = currentCosa,
+                    observedGear = observedGear,
+                )
+            }
+
+            val now = System.currentTimeMillis()
+            if (appliedGear == null) {
+                // First activation uses the current base gear and directly writes
+                // the calculated offset. There is deliberately no intermediate 0.
+                val wrote = currentCosa != desiredCosa
+                if (wrote) writeCosa(desiredCosa)
+                appliedGear = target
+                lastAppliedAt = now
+                lastUserRequestedGear = target
+                return verifiedStatus(
+                    target = target,
+                    observedGear = observedGear,
+                    reason = decision.reason,
+                    wrote = wrote,
+                )
+            }
+
+            val mismatched = observedGear != target
+            // A persistent mismatch can mean the foreground thermal base changed.
+            // A transient mismatch means the system has not finished refreshing.
+            // Either way, preserve the last accepted cosa until a new value has
+            // been calculated and validated; never emit an intermediate zero.
+            val needsBaseRecheck = mismatched
+            if (needsBaseRecheck) {
+                if (lastObservedGear != observedGear) {
+                    lastObservedGear = observedGear
+                    deviationSince = now
+                }
+                if (now - deviationSince < DEVIATION_CONFIRM_MS) {
+                    return ControllerStatus(
+                        ControllerPhase.ACTIVE,
+                        "系统正在刷新档位 · 保持当前设置",
+                        desiredGear = target,
+                        appliedCosa = currentCosa,
+                        observedGear = observedGear,
+                    )
+                }
+                // Replace the old offset only after the mismatch persists. Never
+                // clear cosa first: a direct replacement avoids a temporary default
+                // power step and keeps the output smooth.
+                confirmedBaseGear = observedGear - currentCosa
+                val replacement = target - confirmedBaseGear!!
+                if (replacement !in -9..9) {
+                    return ControllerStatus(
+                        ControllerPhase.ACTIVE,
+                        "当前充电策略暂未满足所选档位 · 保持现有设置并继续跟踪",
+                        desiredGear = target,
+                        appliedCosa = currentCosa,
+                        observedGear = observedGear,
+                    )
+                }
+                val wrote = replacement != currentCosa
+                if (wrote) writeCosa(replacement)
+                lastObservedGear = null
+                deviationSince = 0L
+                appliedGear = target
+                lastAppliedAt = now
+                return verifiedStatus(
+                    target = target,
+                    observedGear = observedGear,
+                    reason = "基础功率档已变化，已直接替换设置",
+                    wrote = wrote,
+                )
+            }
+
+            val needsWrite = currentCosa != desiredCosa
+            if (needsWrite) {
+                writeCosa(desiredCosa)
+            }
+            lastObservedGear = null
+            deviationSince = 0L
+            appliedGear = target
+            lastAppliedAt = System.currentTimeMillis()
+            return verifiedStatus(
+                target = target,
+                observedGear = observedGear,
+                reason = decision.reason,
+                wrote = needsWrite,
             )
         }.getOrElse { error ->
-            runCatching { restoreOffset(keepSingleSpeed = true) }
-            ControllerStatus(ControllerPhase.ERROR, "控制失败：${error.message ?: error.javaClass.simpleName}")
+            ControllerStatus(
+                ControllerPhase.ERROR,
+                "控制暂时中断，已保持当前设置：${error.message ?: error.javaClass.simpleName}",
+                desiredGear = appliedGear,
+                appliedCosa = currentCosa,
+                observedGear = lastObservedGear,
+            )
         }
+    }
+
+    @Synchronized
+    fun readCurrentGear(): Int? {
+        if (!shizuku.isAvailable || !shizuku.hasPermission) {
+            throw IllegalStateException("请先完成 Shizuku 授权")
+        }
+        return readPolicy().gear
     }
 
     @Synchronized
@@ -166,32 +267,132 @@ class ChargingController(
         appliedGear = null
         pendingGear = null
         lastAppliedAt = 0L
+        lastUserRequestedGear = null
+        confirmedBaseGear = null
+        lastObservedGear = null
+        deviationSince = 0L
+        rapidSwitchWindowUntil = 0L
+        appliedTier = null
+        temperatureCandidateGear = null
+        temperatureCandidateSince = 0L
     }
 
-    private fun confirmGear(requested: Int, settings: RuntimeSettings): Int? {
+    private fun confirmGear(
+        requested: Int,
+        settings: RuntimeSettings,
+        tier: ControlTier,
+    ): Int? {
         val current = appliedGear
-        if (current == null || requested == current) {
+        val now = System.currentTimeMillis()
+        if (current == null) {
             pendingGear = null
+            lastUserRequestedGear = requested
+            rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
+            appliedTier = tier
             return requested
         }
-        val now = System.currentTimeMillis()
-        if (lastAppliedAt > 0 && now - lastAppliedAt < MINIMUM_CHANGE_INTERVAL_MS) return null
-        if (pendingGear != requested) {
-            pendingGear = requested
-            pendingSince = now
+        if (requested == current) {
+            pendingGear = null
+            lastUserRequestedGear = requested
+            appliedTier = tier
+            temperatureCandidateGear = null
+            temperatureCandidateSince = 0L
+            return requested
+        }
+        if (appliedTier != tier) {
+            temperatureCandidateGear = null
+            temperatureCandidateSince = 0L
+            if (lastUserRequestedGear != requested) {
+                lastUserRequestedGear = requested
+                pendingGear = requested
+                pendingSince = now
+                // The first deliberate tier change applies immediately. Further
+                // changes inside the next three seconds use a trailing debounce
+                // so the last selected tier wins without writing every tap.
+                if (now >= rapidSwitchWindowUntil) {
+                    pendingGear = null
+                    rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
+                    appliedTier = tier
+                    return requested
+                }
+                return null
+            }
+            if (pendingGear != requested) {
+                pendingGear = requested
+                pendingSince = now
+                return null
+            }
+            return if (now - pendingSince >= SETTINGS_DEBOUNCE_MS) {
+                pendingGear = null
+                rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
+                appliedTier = tier
+                requested
+            } else {
+                null
+            }
+        }
+
+        // Temperature movement inside the same large tier changes the concrete
+        // gear only after it remains stable for the configured confirmation time.
+        // This prevents 0.5°C boundary jitter from repeatedly rewriting cosa.
+        if (temperatureCandidateGear != requested) {
+            temperatureCandidateGear = requested
+            temperatureCandidateSince = now
             return null
         }
-        val delaySeconds = if (requested > current) {
+        val confirmSeconds = if (requested > current) {
             settings.temperatureDownshiftSeconds
         } else {
             settings.temperatureUpshiftSeconds
         }
-        return if (now - pendingSince >= delaySeconds * 1_000L) {
-            pendingGear = null
+        return if (now - temperatureCandidateSince >= confirmSeconds * 1_000L) {
+            temperatureCandidateGear = null
+            temperatureCandidateSince = 0L
             requested
-        } else {
-            null
+        } else null
+    }
+
+    private fun verifiedStatus(
+        target: Int,
+        observedGear: Int,
+        reason: String,
+        wrote: Boolean,
+    ): ControllerStatus {
+        val verification = runCatching<ThermalPolicy?> {
+            val after = readPolicy()
+            if (!after.isParsed) {
+                // This firmware can return an empty policy for gear 1 even while
+                // the calculated cosa value is active and measured power is high.
+                if (target == 1) null else error("系统充电状态为空")
+            } else {
+                require(after.gear == target) { "目标功率档正在切换（当前 ${after.gear}）" }
+                require((after.chargeVal ?: -1) >= 0) { "系统充电参数无效" }
+                require((after.speedChargeAdd ?: -1) >= 0) { "系统快充参数无效" }
+                after
+            }
+        }.getOrElse { error ->
+            return ControllerStatus(
+                ControllerPhase.ACTIVE,
+                "档位正在刷新，软件会继续平稳跟踪：${error.message}",
+                desiredGear = target,
+                appliedCosa = currentCosa,
+                observedGear = observedGear,
+            )
         }
+        return ControllerStatus(
+            phase = ControllerPhase.ACTIVE,
+            message = buildString {
+                append(reason)
+                append(" · 目标功率档已生效")
+                if (wrote) append(" · 已直接替换设置")
+                if (verification == null) append(" · 系统状态暂未返回")
+            },
+            desiredGear = target,
+            appliedCosa = currentCosa,
+            observedGear = verification?.gear ?: observedGear,
+            verified = verification != null,
+        )
+            .also { lastConfirmedGear = it.observedGear }
     }
 
     private fun initializeFromDevice() {
@@ -201,15 +402,22 @@ class ChargingController(
     }
 
     private fun restoreBoth() {
-        runCatching { restoreOffset(keepSingleSpeed = false) }
+        runCatching { restoreOffset() }
     }
 
-    private fun restoreOffset(keepSingleSpeed: Boolean) {
+    private fun restoreOffset() {
         if (!cosaInitialized) initializeFromDevice()
         if (currentCosa != 0) writeCosa(0)
-        setSingleSpeed(if (keepSingleSpeed) 1 else 0)
+        lastUserRequestedGear = null
         appliedGear = null
         pendingGear = null
+        confirmedBaseGear = null
+        lastObservedGear = null
+        deviationSince = 0L
+        rapidSwitchWindowUntil = 0L
+        appliedTier = null
+        temperatureCandidateGear = null
+        temperatureCandidateSince = 0L
     }
 
     private fun writeCosa(value: Int) {
@@ -218,12 +426,6 @@ class ChargingController(
         val readBack = shizuku.readGlobal("cosa_ctc_value").toIntOrNull()
         if (readBack != value) throw IllegalStateException("cosa 回读不一致")
         currentCosa = value
-    }
-
-    private fun setSingleSpeed(value: Int) {
-        if (singleSpeedState == value) return
-        shizuku.putSystem("single_speed_charge_state", value)
-        singleSpeedState = value
     }
 
     private fun readPolicy(): ThermalPolicy {
@@ -236,6 +438,7 @@ class ChargingController(
     }
 
     private companion object {
-        const val MINIMUM_CHANGE_INTERVAL_MS = 20_000L
+        const val SETTINGS_DEBOUNCE_MS = 3_000L
+        const val DEVIATION_CONFIRM_MS = 1_000L
     }
 }

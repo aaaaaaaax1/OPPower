@@ -11,23 +11,28 @@ import com.oppower.model.BatterySnapshot
 import com.oppower.model.ChargeRecord
 import com.oppower.model.ChartPoint
 import com.oppower.model.ControllerStatus
+import com.oppower.model.GearReadResult
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.conservatismRank
 import com.oppower.model.toControlTier
 import com.oppower.service.ChargeControlBus
 import com.oppower.service.ChargeControlService
 import com.oppower.shizuku.ShizukuGateway
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 data class UiState(
     val battery: BatterySnapshot = BatterySnapshot(),
     val settings: RuntimeSettings = RuntimeSettings(),
     val controllerStatus: ControllerStatus = ControllerStatus(),
+    val gearReadResult: GearReadResult? = null,
     val points: List<ChartPoint> = emptyList(),
     val chargeRecords: List<ChargeRecord> = emptyList(),
     val dischargeRecords: List<ChargeRecord> = emptyList(),
@@ -63,23 +68,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             while (true) {
                 val battery = reader.snapshot(mutable.value.settings)
-                val previous = mutable.value.points.lastOrNull()
                 val points = mutable.value.points.ifEmpty { historyStore.load() }
-                val completed = if (previous != null && previous.acOnline != battery.acOnline) {
-                    toRecord(points)
-                } else {
-                    null
-                }
+                val records = deriveRecords(points)
                 mutable.value = mutable.value.copy(
                     battery = battery,
                     controllerStatus = ChargeControlBus.status.value,
                     points = points,
-                    chargeRecords = if (completed?.first == true) {
-                        (mutable.value.chargeRecords + completed.second).takeLast(10)
-                    } else mutable.value.chargeRecords,
-                    dischargeRecords = if (completed?.first == false) {
-                        (mutable.value.dischargeRecords + completed.second).takeLast(10)
-                    } else mutable.value.dischargeRecords,
+                    chargeRecords = records.first.takeLast(50),
+                    dischargeRecords = records.second.takeLast(50),
                     shizukuInstalled = shizuku.isInstalled,
                     shizukuAvailable = shizuku.isAvailable,
                     shizukuPermission = shizuku.hasPermission,
@@ -94,10 +90,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val updated = transform(oldSettings).sanitized()
         store.save(updated)
         mutable.value = mutable.value.copy(settings = updated)
+        if (!oldSettings.masterEnabled && updated.masterEnabled) {
+            ChargeControlService.start(getApplication())
+        }
         if (updated.historyEnabled != oldSettings.historyEnabled) {
             ChargeControlService.historySettingsChanged(getApplication())
         }
         ChargeControlBus.requestUpdate()
+    }
+
+    fun readCurrentGear() {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    require(shizuku.isAvailable) { "请先启动 Shizuku" }
+                    require(shizuku.hasPermission) { "请先完成 Shizuku 授权" }
+                    val raw = shizuku.readThermalPolicy()
+                    Regex("gearVal:\\s*(-?\\d+)")
+                        .find(raw)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                        ?: error("系统暂未返回档位")
+                }
+            }
+            mutable.value = mutable.value.copy(
+                gearReadResult = result.fold(
+                    onSuccess = { GearReadResult(it, now) },
+                    onFailure = { GearReadResult(null, now, it.message ?: "读取失败") },
+                ),
+            )
+        }
     }
 
     fun requestShizukuPermission() {
@@ -149,9 +173,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun RuntimeSettings.sanitized(): RuntimeSettings {
+        val sourceTemperatures = customRules.temperatureRules.take(2)
         var previous = 29.5f
-        val normalized = customRules.temperatureRules.map { rule ->
-            val threshold = rule.threshold.coerceIn((previous + 0.5f).coerceAtMost(46f), 46f)
+        val normalized = sourceTemperatures.mapIndexed { index, rule ->
+            val minimum = previous + 0.5f
+            val maximum = 46f - (sourceTemperatures.lastIndex - index) * 0.5f
+            val threshold = rule.threshold.coerceIn(minimum, maximum)
             previous = threshold
             rule.copy(threshold = threshold)
         }
@@ -165,21 +192,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             maximum = target
             rule.copy(target = target)
         }
+        val sourceSoc = customRules.socRules.take(2)
+        var previousSoc = 0
+        var maximumSoc = baseTier.toControlTier()
+        val orderedSocTargets = sourceSoc.mapIndexed { index, rule ->
+            val minimum = previousSoc + 1
+            val maximum = 100 - (sourceSoc.lastIndex - index)
+            val threshold = rule.thresholdPercent.coerceIn(minimum, maximum)
+            previousSoc = threshold
+            val target = if (rule.target.conservatismRank() <= maximumSoc.conservatismRank()) {
+                rule.target
+            } else {
+                maximumSoc
+            }
+            maximumSoc = target
+            rule.copy(thresholdPercent = threshold, target = target)
+        }
         return copy(
             customRules = customRules.copy(
                 temperatureRules = orderedTargets,
+                socRules = orderedSocTargets,
                 socStopPercent = customRules.socStopPercent.coerceIn(1, 100),
             ),
         )
     }
 
-    private fun toRecord(points: List<ChartPoint>): Pair<Boolean, ChargeRecord>? {
-        if (points.size < 2) return null
-        val charging = points.last().acOnline
-        val group = points.filter { it.acOnline == charging }
-        if (group.size < 2) return null
+    private fun deriveRecords(points: List<ChartPoint>): Pair<List<ChargeRecord>, List<ChargeRecord>> {
+        val groups = mutableListOf<List<ChartPoint>>()
+        var current = mutableListOf<ChartPoint>()
+        points.sortedBy { it.epochMillis }.forEach { point ->
+            if (current.isEmpty() || current.last().acOnline == point.acOnline) {
+                current += point
+            } else {
+                groups += current
+                current = mutableListOf(point)
+            }
+        }
+        if (current.isNotEmpty()) groups += current
+        val records = groups.filter { it.size >= 2 }.map(::toRecord)
+        return records.partition { record ->
+            record.points.firstOrNull()?.acOnline == true
+        }
+    }
+
+    private fun toRecord(group: List<ChartPoint>): ChargeRecord {
         val first = group.first()
         val last = group.last()
+        val charging = first.acOnline
         val record = ChargeRecord(
             startedAtMillis = first.epochMillis,
             endedAtMillis = last.epochMillis,
@@ -188,7 +247,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             peakPowerW = group.maxOf { it.powerW },
             averagePowerW = group.map { it.powerW }.average().toFloat(),
             maxTemperatureC = group.maxOf { it.temperatureC },
+            startVoltageV = first.voltageMv / 1000f,
+            endVoltageV = last.voltageMv / 1000f,
+            peakCurrentMa = group.maxOf { kotlin.math.abs(it.currentMa) },
+            averageCurrentMa = group.map { kotlin.math.abs(it.currentMa) }.average().roundToInt(),
+            chargeDeltaMah = if (charging) {
+                group.zipWithNext().sumOf { (left, right) ->
+                    val seconds = ((right.epochMillis - left.epochMillis).coerceAtLeast(0L)) / 1000.0
+                    ((kotlin.math.abs(left.currentMa) + kotlin.math.abs(right.currentMa)) / 2.0) * seconds / 3600.0
+                }.roundToInt().takeIf { it > 0 }
+            } else null,
+            endReason = when {
+                charging && last.levelPercent >= 100 -> "充满"
+                charging -> "拔电"
+                else -> "放电会话"
+            },
+            points = group,
         )
-        return charging to record
+        return record
     }
 }

@@ -16,13 +16,20 @@ class RuleEngine {
         sessionSocLocked: Boolean,
     ): RuleDecision {
         if (batteryFull || levelPercent >= 100) {
-            return RuleDecision(ControlTier.PAUSED, null, "电量 100% / FULL：暂停并关闭单速")
+            return RuleDecision(ControlTier.PAUSED, null, "电量 100% / FULL：暂停快充增强")
         }
-        if (sessionSocLocked || levelPercent >= settings.customRules.socStopPercent) {
-            return RuleDecision(ControlTier.PAUSED, null, "电量达到 ${settings.customRules.socStopPercent}%：本次插电暂停")
+        val pauseSoc = socPauseThreshold(settings)
+        if (sessionSocLocked || levelPercent >= pauseSoc) {
+            return RuleDecision(ControlTier.PAUSED, null, "电量达到 $pauseSoc%：本次插电暂停")
         }
 
-        val tier = resolveTier(settings, temperatureC)
+        val temperatureTier = resolveTier(settings, temperatureC)
+        val socTier = resolveSocTier(settings, levelPercent)
+        val tier = if (temperatureTier.conservatismRank() <= socTier.conservatismRank()) {
+            temperatureTier
+        } else {
+            socTier
+        }
         if (tier == ControlTier.PAUSED) {
             return RuleDecision(tier, null, "温度达到暂停阈值")
         }
@@ -51,6 +58,30 @@ class RuleEngine {
         }
         return result
     }
+
+    fun resolveSocTier(settings: RuntimeSettings, levelPercent: Int): ControlTier {
+        val base = settings.baseTier.toControlTier()
+        if (!settings.customRulesEnabled) return base
+        var result = base
+        settings.customRules.socRules.sortedBy { it.thresholdPercent }.forEach { rule ->
+            if (levelPercent >= rule.thresholdPercent &&
+                rule.target.conservatismRank() <= result.conservatismRank()
+            ) {
+                result = rule.target
+            }
+        }
+        return result
+    }
+
+    fun socPauseThreshold(settings: RuntimeSettings): Int =
+        if (settings.customRulesEnabled) {
+            settings.customRules.socRules
+                .filter { it.target == ControlTier.PAUSED }
+                .minOfOrNull { it.thresholdPercent }
+                ?: 100
+        } else {
+            settings.customRules.socStopPercent.coerceIn(1, 100)
+        }
 
     fun defaultTemperatureRules(baseTier: BaseTier): List<TierRule> = when (baseTier) {
         BaseTier.MAX_OUTPUT -> listOf(

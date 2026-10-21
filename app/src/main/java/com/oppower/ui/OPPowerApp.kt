@@ -1,6 +1,11 @@
 package com.oppower.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,6 +36,7 @@ fun OPPowerApp(
     state: UiState,
     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
     onRequestShizuku: () -> Unit,
+    onReadGear: () -> Unit,
     onRestore: () -> Unit,
     onDismissIntro: () -> Unit,
     onClearHistory: () -> Unit,
@@ -51,7 +57,12 @@ fun OPPowerApp(
         }
     }
 
-    when (page) {
+    AnimatedContent(
+        targetState = page,
+        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+        label = "oppower-page",
+    ) { visiblePage ->
+        when (visiblePage) {
         Page.MAIN -> MainPage(
             state = state,
             onOpenChargeSettings = { page = Page.CHARGE_SETTINGS },
@@ -70,6 +81,7 @@ fun OPPowerApp(
             onSettingsChange = onSettingsChange,
             onRestore = onRestore,
             onRequestShizuku = onRequestShizuku,
+            onReadGear = onReadGear,
         )
 
         Page.SETTINGS -> SettingsRouter(
@@ -88,6 +100,7 @@ fun OPPowerApp(
             onClearHistory = onClearHistory,
             onRequestShizuku = onRequestShizuku,
         )
+        }
     }
 
     if (state.showIntro) {

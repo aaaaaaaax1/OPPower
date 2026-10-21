@@ -5,8 +5,8 @@ import com.oppower.model.BaseTier
 import com.oppower.model.ControlRules
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.TierRule
+import com.oppower.model.SocTierRule
 import com.oppower.model.ControlTier
-import com.oppower.model.NotificationIcon
 import com.oppower.model.ThemeMode
 import com.oppower.model.ThemePalette
 
@@ -17,14 +17,22 @@ class PreferencesStore(context: Context) {
         val default = RuntimeSettings()
         val base = runCatching { BaseTier.valueOf(prefs.getString("base_tier", default.baseTier.name).orEmpty()) }
             .getOrDefault(default.baseTier)
-        val custom = ControlRules(
-            temperatureRules = listOf(
-                TierRule(prefs.getFloat("temp_1", 41f), controlTier(prefs.getString("tier_1", ControlTier.HIGH.name))),
-                TierRule(prefs.getFloat("temp_2", 42f), controlTier(prefs.getString("tier_2", ControlTier.GENTLE.name))),
-                TierRule(prefs.getFloat("temp_3", 43f), controlTier(prefs.getString("tier_3", ControlTier.PAUSED.name))),
-            ),
-            socStopPercent = prefs.getInt("soc_stop", 80),
-        )
+        val hasV2Rules = prefs.getBoolean("rules_v2", false)
+        val custom = if (hasV2Rules) {
+            ControlRules(
+                temperatureRules = listOf(
+                    TierRule(prefs.getFloat("temp_1", 42f), controlTier(prefs.getString("tier_1", ControlTier.HIGH.name))),
+                    TierRule(prefs.getFloat("temp_2", 43f), controlTier(prefs.getString("tier_2", ControlTier.PAUSED.name))),
+                ),
+                socRules = listOf(
+                    SocTierRule(prefs.getInt("soc_rule_1", 60), controlTier(prefs.getString("soc_tier_1", ControlTier.HIGH.name))),
+                    SocTierRule(prefs.getInt("soc_rule_2", 85), controlTier(prefs.getString("soc_tier_2", ControlTier.PAUSED.name))),
+                ),
+                socStopPercent = prefs.getInt("soc_stop", 80),
+            )
+        } else {
+            ControlRules()
+        }
         return RuntimeSettings(
             masterEnabled = prefs.getBoolean("master_enabled", false),
             baseTier = base,
@@ -48,11 +56,10 @@ class PreferencesStore(context: Context) {
             notificationShowVoltage = prefs.getBoolean("notify_voltage", true),
             notificationShowTemperature = prefs.getBoolean("notify_temperature", true),
             notificationShowSupply = prefs.getBoolean("notify_supply", true),
+            showCurrentInAmpere = prefs.getBoolean("show_current_ampere", false),
             notificationIntegerPower = prefs.getBoolean("notify_integer_power", false),
-            notificationIcon = enumValue(prefs.getString("notify_icon", null), NotificationIcon.BATTERY),
             notificationRefreshSeconds = prefs.getInt("notify_refresh_seconds", 5).coerceIn(2, 30),
             notificationScreenOffRefreshSeconds = prefs.getInt("notify_screen_off_seconds", 30).coerceIn(3, 300),
-            notificationCloseOnceEnabled = prefs.getBoolean("notify_close_once", true),
             notificationAutoCloseOnFull = prefs.getBoolean("notify_close_full", true),
             notificationAutoCloseOnScreenOff = prefs.getBoolean("notify_close_screen_off", false),
             invertCurrentSign = prefs.getBoolean("invert_current_sign", false),
@@ -77,7 +84,11 @@ class PreferencesStore(context: Context) {
             .putFloat("temp_3", settings.customRules.temperatureRules.getOrNull(2)?.threshold ?: 43f)
             .putString("tier_1", (settings.customRules.temperatureRules.getOrNull(0)?.target ?: ControlTier.HIGH).name)
             .putString("tier_2", (settings.customRules.temperatureRules.getOrNull(1)?.target ?: ControlTier.GENTLE).name)
-            .putString("tier_3", (settings.customRules.temperatureRules.getOrNull(2)?.target ?: ControlTier.PAUSED).name)
+            .putInt("soc_rule_1", settings.customRules.socRules.getOrNull(0)?.thresholdPercent ?: 60)
+            .putInt("soc_rule_2", settings.customRules.socRules.getOrNull(1)?.thresholdPercent ?: 85)
+            .putString("soc_tier_1", (settings.customRules.socRules.getOrNull(0)?.target ?: ControlTier.HIGH).name)
+            .putString("soc_tier_2", (settings.customRules.socRules.getOrNull(1)?.target ?: ControlTier.PAUSED).name)
+            .putBoolean("rules_v2", true)
             .putInt("soc_stop", settings.customRules.socStopPercent)
             .putInt("temp_down_seconds", settings.temperatureDownshiftSeconds)
             .putInt("temp_up_seconds", settings.temperatureUpshiftSeconds)
@@ -94,11 +105,10 @@ class PreferencesStore(context: Context) {
             .putBoolean("notify_voltage", settings.notificationShowVoltage)
             .putBoolean("notify_temperature", settings.notificationShowTemperature)
             .putBoolean("notify_supply", settings.notificationShowSupply)
+            .putBoolean("show_current_ampere", settings.showCurrentInAmpere)
             .putBoolean("notify_integer_power", settings.notificationIntegerPower)
-            .putString("notify_icon", settings.notificationIcon.name)
             .putInt("notify_refresh_seconds", settings.notificationRefreshSeconds)
             .putInt("notify_screen_off_seconds", settings.notificationScreenOffRefreshSeconds)
-            .putBoolean("notify_close_once", settings.notificationCloseOnceEnabled)
             .putBoolean("notify_close_full", settings.notificationAutoCloseOnFull)
             .putBoolean("notify_close_screen_off", settings.notificationAutoCloseOnScreenOff)
             .putBoolean("invert_current_sign", settings.invertCurrentSign)

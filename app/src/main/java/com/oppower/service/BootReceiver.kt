@@ -3,6 +3,7 @@ package com.oppower.service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.BatteryManager
 import com.oppower.data.PreferencesStore
 
 class BootReceiver : BroadcastReceiver() {
@@ -13,7 +14,9 @@ class BootReceiver : BroadcastReceiver() {
             -> PreferencesStore(context).load().let { it.masterEnabled && it.resumeAfterReboot }
             else -> false
         }
-        if (shouldStart) {
+        val battery = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        if (shouldStart && plugged) {
             ChargeControlService.start(context)
         }
     }

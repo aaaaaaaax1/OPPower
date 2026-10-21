@@ -6,7 +6,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -29,17 +28,17 @@ data class UiColors(
 )
 
 private val darkColors = UiColors(
-    background = Color(0xFF0E1014),
-    surface = Color(0xFF171A20),
-    surfaceRaised = Color(0xFF1D2228),
-    accent = Color(0xFFA8D2C7),
-    secondary = Color(0xFFC2B69F),
-    textPrimary = Color(0xFFF1F3F4),
-    textSecondary = Color(0xFFA5ACB3),
-    danger = Color(0xFFF09A93),
-    outline = Color(0xFF30353D),
-    accentSurface = Color(0xFF1D2B28),
-    secondarySurface = Color(0xFF292721),
+    background = Color(0xFF0E1317),
+    surface = Color(0xFF151B20),
+    surfaceRaised = Color(0xFF1B2228),
+    accent = Color(0xFF79D6C1),
+    secondary = Color(0xFFCDAA70),
+    textPrimary = Color(0xFFEDF3F2),
+    textSecondary = Color(0xFF96A3A7),
+    danger = Color(0xFFFF8178),
+    outline = Color(0xFF29343A),
+    accentSurface = Color(0xFF15252A),
+    secondarySurface = Color(0xFF24241C),
 )
 
 private val lightColors = UiColors(
@@ -119,14 +118,14 @@ fun OPPowerTheme(settings: RuntimeSettings, content: @Composable () -> Unit) {
             onSurface = colors.textPrimary,
         )
     }
-    key(settings.themeMode, settings.themePalette, settings.fontScale, settings.uiScale, settings.cardOpacity) {
-        CompositionLocalProvider(
-            LocalDensity provides Density(
-                density = density.density * settings.uiScale.coerceIn(0.85f, 1.15f),
-                fontScale = density.fontScale * settings.fontScale.coerceIn(0.85f, 1.2f),
-            ),
-        ) {
-            MaterialTheme(colorScheme = scheme, content = content)
-        }
+    // Theme changes must update the existing composition in place. Re-keying this
+    // subtree discarded the current settings page and sent the user back home.
+    CompositionLocalProvider(
+        LocalDensity provides Density(
+            density = density.density * settings.uiScale.coerceIn(0.85f, 1.15f),
+            fontScale = density.fontScale * settings.fontScale.coerceIn(0.85f, 1.2f),
+        ),
+    ) {
+        MaterialTheme(colorScheme = scheme, content = content)
     }
 }

@@ -44,6 +44,13 @@ enum class ControlTier(val label: String) {
     PAUSED("暂停 gear 策略"),
 }
 
+fun powerTierLabel(gear: Int?): String = when (gear) {
+    0 -> "最大输出（无限制）"
+    in 1..4 -> "高效快充（20–40 W）"
+    5 -> "温和策略（10–30 W）"
+    else -> "暂停快充增强"
+}
+
 enum class ThemeMode(val label: String) {
     FOLLOW_SYSTEM("跟随系统"),
     LIGHT("浅色"),
@@ -59,22 +66,24 @@ enum class ThemePalette(val label: String) {
     VIOLET("雾紫"),
 }
 
-enum class NotificationIcon(val label: String) {
-    BATTERY("电池"),
-    BOLT("闪电"),
-    APP("应用图标"),
-}
-
 data class TierRule(
     val threshold: Float,
     val target: ControlTier,
 )
 
+data class SocTierRule(
+    val thresholdPercent: Int,
+    val target: ControlTier,
+)
+
 data class ControlRules(
     val temperatureRules: List<TierRule> = listOf(
-        TierRule(41f, ControlTier.HIGH),
-        TierRule(42f, ControlTier.GENTLE),
+        TierRule(42f, ControlTier.HIGH),
         TierRule(43f, ControlTier.PAUSED),
+    ),
+    val socRules: List<SocTierRule> = listOf(
+        SocTierRule(60, ControlTier.HIGH),
+        SocTierRule(85, ControlTier.PAUSED),
     ),
     val socStopPercent: Int = 80,
 )
@@ -87,6 +96,13 @@ data class ChargeRecord(
     val peakPowerW: Float,
     val averagePowerW: Float,
     val maxTemperatureC: Float,
+    val startVoltageV: Float = 0f,
+    val endVoltageV: Float = 0f,
+    val peakCurrentMa: Int = 0,
+    val averageCurrentMa: Int = 0,
+    val chargeDeltaMah: Int? = null,
+    val endReason: String = "拔电",
+    val points: List<ChartPoint> = emptyList(),
 )
 
 data class RuntimeSettings(
@@ -112,11 +128,10 @@ data class RuntimeSettings(
     val notificationShowVoltage: Boolean = true,
     val notificationShowTemperature: Boolean = true,
     val notificationShowSupply: Boolean = true,
+    val showCurrentInAmpere: Boolean = false,
     val notificationIntegerPower: Boolean = false,
-    val notificationIcon: NotificationIcon = NotificationIcon.BATTERY,
     val notificationRefreshSeconds: Int = 5,
     val notificationScreenOffRefreshSeconds: Int = 30,
-    val notificationCloseOnceEnabled: Boolean = true,
     val notificationAutoCloseOnFull: Boolean = true,
     val notificationAutoCloseOnScreenOff: Boolean = false,
     val invertCurrentSign: Boolean = false,
@@ -137,12 +152,20 @@ enum class ControllerPhase {
     ERROR,
 }
 
+data class GearReadResult(
+    val gear: Int?,
+    val readAtMillis: Long,
+    val error: String? = null,
+)
+
 data class ControllerStatus(
     val phase: ControllerPhase = ControllerPhase.DISABLED,
     val message: String = "总开关未开启",
     val desiredGear: Int? = null,
     val appliedCosa: Int = 0,
     val sessionSocLocked: Boolean = false,
+    val observedGear: Int? = null,
+    val verified: Boolean = false,
 )
 
 data class ChartPoint(
@@ -151,4 +174,6 @@ data class ChartPoint(
     val temperatureC: Float,
     val levelPercent: Int,
     val acOnline: Boolean,
+    val currentMa: Int = 0,
+    val voltageMv: Int = 0,
 )

@@ -37,6 +37,8 @@ class ChartHistoryStore(context: Context) {
                 temperatureC = battery.temperatureC,
                 levelPercent = battery.levelPercent,
                 acOnline = battery.acOnline,
+                currentMa = battery.currentMa,
+                voltageMv = battery.voltageMv,
             ))
                 .filter { it.epochMillis >= nowMillis - RETENTION_MILLIS }
                 .takeLast(MAX_POINTS)
@@ -74,13 +76,15 @@ class ChartHistoryStore(context: Context) {
 
 internal object ChartHistoryCodec {
     fun encode(points: List<ChartPoint>): String = buildString {
-        append("epoch,power,temp,soc,ac\n")
+        append("epoch,power,temp,soc,ac,current,voltage\n")
         points.forEach { point ->
             append(point.epochMillis).append(',')
             append(point.powerW).append(',')
             append(point.temperatureC).append(',')
             append(point.levelPercent).append(',')
-            append(if (point.acOnline) 1 else 0).append('\n')
+            append(if (point.acOnline) 1 else 0).append(',')
+            append(point.currentMa).append(',')
+            append(point.voltageMv).append('\n')
         }
     }
 
@@ -88,7 +92,7 @@ internal object ChartHistoryCodec {
         .drop(1)
         .mapNotNull { line ->
             val values = line.split(',')
-            if (values.size != 5) return@mapNotNull null
+            if (values.size !in 5..7) return@mapNotNull null
             runCatching {
                 ChartPoint(
                     epochMillis = values[0].toLong(),
@@ -96,6 +100,8 @@ internal object ChartHistoryCodec {
                     temperatureC = values[2].toFloat(),
                     levelPercent = values[3].toInt(),
                     acOnline = values[4] == "1",
+                    currentMa = values.getOrNull(5)?.toIntOrNull() ?: 0,
+                    voltageMv = values.getOrNull(6)?.toIntOrNull() ?: 0,
                 )
             }.getOrNull()
         }

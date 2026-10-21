@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     onSettingsChange = viewModel::updateSettings,
                     onRequestShizuku = viewModel::requestShizukuPermission,
+                    onReadGear = viewModel::readCurrentGear,
                     onRestore = viewModel::restoreAll,
                     onDismissIntro = viewModel::dismissIntro,
                     onClearHistory = viewModel::clearHistory,

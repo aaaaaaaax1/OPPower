@@ -50,12 +50,8 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
 internal object AllowedCommands {
     private val exact = setOf(
         "settings get global cosa_ctc_value",
-        "settings get system single_speed_charge_state",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy",
     )
     private val putCosa = Regex("settings put global cosa_ctc_value -?\\d{1,3}")
-    private val putSingleSpeed = Regex("settings put system single_speed_charge_state [01]")
-
-    fun matches(command: String): Boolean =
-        command in exact || putCosa.matches(command) || putSingleSpeed.matches(command)
+    fun matches(command: String): Boolean = command in exact || putCosa.matches(command)
 }

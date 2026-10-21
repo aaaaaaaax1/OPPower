@@ -121,12 +121,6 @@ class ShizukuGateway(context: Context) {
         execute("settings put global ${name.requireAllowedName()} $value")
     }
 
-    fun readSystem(name: String): String = execute("settings get system ${name.requireAllowedName()}")
-
-    fun putSystem(name: String, value: Int) {
-        execute("settings put system ${name.requireAllowedName()} $value")
-    }
-
     fun readThermalPolicy(): String =
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy")
 
@@ -146,7 +140,7 @@ class ShizukuGateway(context: Context) {
     }
 
     private fun String.requireAllowedName(): String {
-        require(this == "cosa_ctc_value" || this == "single_speed_charge_state")
+        require(this == "cosa_ctc_value")
         return this
     }
 

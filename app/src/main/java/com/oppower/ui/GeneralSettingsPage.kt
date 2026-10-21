@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,7 +25,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,7 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.oppower.BuildConfig
-import com.oppower.model.NotificationIcon
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.ThemeMode
 import com.oppower.model.ThemePalette
@@ -216,9 +218,10 @@ private fun SettingsHomePage(
 
         Surface(
             modifier = Modifier.fillMaxWidth().clickable(onClick = onJoinQq),
-            color = AccentSurface,
-            shape = RoundedCornerShape(14.dp),
+            color = Surface,
+            shape = RoundedCornerShape(12.dp),
             border = BorderStroke(1.dp, Outline),
+            shadowElevation = 2.dp,
         ) {
             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Surface(color = SurfaceRaised, shape = RoundedCornerShape(8.dp)) {
@@ -351,7 +354,7 @@ private fun NotificationSettingsPage(
             }
         }
 
-        SettingsSection("刷新与自动关闭") {
+        SettingsSection("刷新与自动精简") {
             SettingLabel("刷新间隔")
             ChoiceGrid(
                 options = listOf(2, 5, 10, 30),
@@ -370,13 +373,6 @@ private fun NotificationSettingsPage(
             )
             SettingsDivider(Modifier.padding(vertical = 10.dp))
             SettingSwitchRow(
-                title = "显示“本次关闭”按钮",
-                description = "临时关闭状态通知与本次控制；重新打开应用后恢复",
-                checked = settings.notificationCloseOnceEnabled,
-                onCheckedChange = { value -> onSettingsChange { it.copy(notificationCloseOnceEnabled = value) } },
-            )
-            SettingsDivider()
-            SettingSwitchRow(
                 title = "充满后精简状态通知",
                 description = "电量 100% 时恢复系统充电策略，并保留一条精简后台通知",
                 checked = settings.notificationAutoCloseOnFull,
@@ -388,15 +384,6 @@ private fun NotificationSettingsPage(
                 description = "熄屏时只保留必要后台通知，亮屏后恢复详细数据",
                 checked = settings.notificationAutoCloseOnScreenOff,
                 onCheckedChange = { value -> onSettingsChange { it.copy(notificationAutoCloseOnScreenOff = value) } },
-            )
-            SettingsDivider()
-            SettingLabel("通知栏图标")
-            ChoiceGrid(
-                options = enumValues<NotificationIcon>().toList(),
-                selected = settings.notificationIcon,
-                label = { it.label },
-                onSelect = { value -> onSettingsChange { it.copy(notificationIcon = value) } },
-                columns = 3,
             )
         }
     }
@@ -697,9 +684,9 @@ private fun FaqPage(onBack: () -> Unit) {
     val entries = listOf(
         FaqEntry("为什么手机显示功率和功率计不一致？", "界面显示的是系统提供的电池侧数据，功率计显示的是充电器输入端功率。链路损耗和手机自身耗电都会造成差异。"),
         FaqEntry("为什么亮屏快充有时只维持十几瓦？", "系统会结合温度、电量、前台应用和充电策略动态限流。OPPower 能调整已验证的策略档位，但不会关闭原生温控。"),
-        FaqEntry("拔掉充电器后会恢复默认吗？", "会。控制服务检测到拔电后会恢复偏移，并关闭单速保持。重新接电时再按当前规则开始。"),
+        FaqEntry("拔掉充电器后会恢复默认吗？", "会。控制服务检测到拔电后会恢复偏移。重新接电时再按当前规则开始。"),
         FaqEntry("为什么设置已经开启却没有生效？", "请先确认系统控制权限、电池优化白名单和常驻服务状态。控制策略无法回读时，应用会主动恢复默认。"),
-        FaqEntry("充满后为什么单速保持会关闭？", "100% 后继续保持充电策略没有意义。应用会恢复偏移并关闭单速保持，重新拔插后才开始新会话。"),
+        FaqEntry("充满后为什么会暂停增强？", "100% 后继续提高充电功率没有意义。应用会恢复偏移并暂停增强，重新拔插后才开始新会话。"),
         FaqEntry("隐藏后台任务会影响快充吗？", "不会。它只把主界面从最近任务中移除，常驻控制服务仍会运行。"),
         FaqEntry("曲线为什么每 15 分钟才标一个时间节点？", "横轴按 15 分钟显示时间标签，实际数据仍按约 30 秒采样，可以左右滑动查看 24 小时记录。"),
     )
@@ -836,6 +823,7 @@ private fun SettingsPage(
         Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.48f))))
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -863,7 +851,12 @@ private fun SettingsPage(
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 2.dp))
-        Surface(color = Surface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, Outline)) {
+        Surface(
+            color = Surface,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, Outline),
+            shadowElevation = 2.dp,
+        ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 2.dp), content = content)
         }
     }
