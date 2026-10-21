@@ -41,6 +41,9 @@ class ChargeControlService : Service() {
         createChannel()
         startForeground(NOTIFICATION_ID, notification("等待接入电源"))
         scope.launch {
+            // A previous process can leave the persistent setting behind after
+            // a crash. Restore it before the normal control loop starts.
+            runCatching { controller.restoreAll() }
             while (true) {
                 val settings = prefs.load()
                 val battery = batteryReader.snapshot()
