@@ -50,8 +50,13 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
 internal object AllowedCommands {
     private val exact = setOf(
         "settings get global cosa_ctc_value",
+        "settings get system oplus_camera_3rd_activity",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy",
+        "dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus",
     )
     private val putCosa = Regex("settings put global cosa_ctc_value -?\\d{1,3}")
-    fun matches(command: String): Boolean = command in exact || putCosa.matches(command)
+    private val putCameraActivityAlias =
+        Regex("settings put system oplus_camera_3rd_activity (?:0|1|00|01)")
+    fun matches(command: String): Boolean =
+        command in exact || putCosa.matches(command) || putCameraActivityAlias.matches(command)
 }

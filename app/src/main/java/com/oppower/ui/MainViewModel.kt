@@ -5,6 +5,7 @@ import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.oppower.battery.BatteryReader
+import com.oppower.controller.ChargingController
 import com.oppower.data.PreferencesStore
 import com.oppower.history.ChartHistoryBus
 import com.oppower.history.ChartHistoryStore
@@ -202,19 +203,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching {
                     require(shizuku.isAvailable) { "请先启动 Shizuku" }
                     require(shizuku.hasPermission) { "请先完成 Shizuku 授权" }
-                    val raw = shizuku.readThermalPolicy()
-                    Regex("gearVal:\\s*(-?\\d+)")
-                        .find(raw)
-                        ?.groupValues
-                        ?.getOrNull(1)
-                        ?.toIntOrNull()
-                        ?: error("系统暂未返回档位")
+                    ChargingController(shizuku).readResolvedGear()
                 }
             }
             mutable.value = mutable.value.copy(
                 gearReadResult = result.fold(
-                    onSuccess = { GearReadResult(it, now) },
-                    onFailure = { GearReadResult(null, now, it.message ?: "读取失败") },
+                    onSuccess = {
+                        GearReadResult(
+                            gear = it.gear,
+                            readAtMillis = now,
+                            baseGear = it.baseGear,
+                            calculatedGear = it.calculatedGear,
+                            cosa = it.cosa,
+                            chargeVal = it.chargeVal,
+                            source = it.source,
+                        )
+                    },
+                    onFailure = { GearReadResult(null, now, error = it.message ?: "读取失败") },
                 ),
             )
         }

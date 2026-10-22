@@ -1,0 +1,19 @@
+OPPower 1.0.0-beta8
+versionCode=8
+built=2026-10-23 03:06:18 +0800
+apk=OPPower-1.0.0-beta8-debug.apk
+sha256=9D7DB495BFB4457983743B5DB846B7F0CF390AA0C5BE3BA91758B62564CA977B
+
+Changes:
+- OPPower now defines the current gear as Thermal Levels[0] + cosa_ctc_value.
+- Target cosa is calculated only as target gear minus the current thermal base gear.
+- When the thermal base gear changes, cosa is recalculated immediately and the calculated gear returns to the target.
+- Cached policy.gear is not parsed, displayed, used for calibration, used for verification, or used to calculate the next cosa.
+- getCurThermalPolicy is read only for chargeVal diagnostics.
+- The UI now shows base gear, cosa, calculated gear and chargeVal; the old other-correction field was removed.
+- A stale policy cache can no longer overwrite the calculated gear or inject an inferred correction.
+- Unit tests: 32, failures: 0, errors: 0.
+- Android lint: 0 errors, 20 warnings.
+- Debug APK assembly, version inspection and signature verification completed.
+- Real-device read verification passed on RMX8899: calculated gear 5 = thermal base 5 + cosa 0; chargeVal 4 remained separate.
+- Real-device charging-write and power verification remains pending because the phone was not connected to AC.

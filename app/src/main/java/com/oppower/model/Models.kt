@@ -24,6 +24,17 @@ data class ThermalPolicy(
         get() = gear != null
 }
 
+data class ThermalStatus(
+    val raw: String = "",
+    val status: Int? = null,
+    val temperatureC: Float? = null,
+    val baseGear: Int? = null,
+    val levels: List<Int> = emptyList(),
+) {
+    val isParsed: Boolean
+        get() = baseGear != null
+}
+
 enum class BaseTier(val label: String, val gearSet: List<Int>) {
     MAX_OUTPUT("最大输出", listOf(0)),
     HIGH("20–40 W", listOf(1, 2, 3, 4)),
@@ -155,6 +166,11 @@ enum class ControllerPhase {
 data class GearReadResult(
     val gear: Int?,
     val readAtMillis: Long,
+    val baseGear: Int? = null,
+    val calculatedGear: Int? = null,
+    val cosa: Int? = null,
+    val chargeVal: Int? = null,
+    val source: String? = null,
     val error: String? = null,
 )
 
@@ -165,6 +181,10 @@ data class ControllerStatus(
     val appliedCosa: Int = 0,
     val sessionSocLocked: Boolean = false,
     val observedGear: Int? = null,
+    val baseGear: Int? = null,
+    val calculatedGear: Int? = null,
+    val chargeVal: Int? = null,
+    val gearSource: String? = null,
     val verified: Boolean = false,
 )
 

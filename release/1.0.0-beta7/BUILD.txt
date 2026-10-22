@@ -1,0 +1,18 @@
+OPPower 1.0.0-beta7
+versionCode=7
+built=2026-10-23 02:49:26 +0800
+apk=OPPower-1.0.0-beta7-debug.apk
+sha256=78AB7D2183C3C5F47F1C1FF4FB0788D9250E9489FCA89A08E5F5469BFF0BDCA5
+
+Changes:
+- Replaced the fixed target-to-cosa mapping with the live system formula: gear = thermal base + scene/other correction + cosa.
+- Read Thermal Levels[0] from getThermalStatus and calculate cosa as target gear minus base gear minus the current correction.
+- Recalculate every control cycle so base-gear or scene changes update cosa without first passing through cosa=0.
+- Keep chargeVal as a separate diagnostic field; it is not part of the gear sum and never substitutes for policy.gear.
+- The UI now shows base gear, estimated other correction, cosa, calculated gear, actual policy.gear and chargeVal.
+- Only a fresh, trustworthy policy/base/cosa sample updates the correction estimate; stale policy cache data is retained as waiting state instead of being mistaken for a verified gear.
+- Unit tests: 30, failures: 0, errors: 0.
+- Android lint: 0 errors, 20 warnings.
+- Debug APK assembly and signature/version inspection completed.
+- Real-device read verification passed: actual gear 7 = base gear 7 + correction 0 + cosa 0; chargeVal remained a separate value of 2.
+- Real-device charging-write and power verification for the new dynamic formula is still required because the phone was not connected to AC during this check.

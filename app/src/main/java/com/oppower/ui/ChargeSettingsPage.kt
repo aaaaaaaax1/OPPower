@@ -124,8 +124,9 @@ internal fun ChargeSettingsPage(
                     Column(Modifier.weight(1f)) {
                         Text(
                             state.gearReadResult?.let { result ->
-                                result.error?.let { "读取失败 · " + it } ?: "当前实际档位：" + (result.gear?.toString() ?: "系统暂未返回")
-                            } ?: "读取系统当前实际档位（只读）",
+                                result.error?.let { "读取失败 · " + it }
+                                    ?: "当前计算档位：" + (result.gear?.toString() ?: "系统暂未返回")
+                            } ?: "读取基础档与 cosa 计算档位（只读）",
                             color = when {
                                 state.gearReadResult?.error != null -> Danger
                                 state.gearReadResult?.gear != null -> Cyan
@@ -133,6 +134,30 @@ internal fun ChargeSettingsPage(
                             },
                             fontSize = 9.sp,
                         )
+                        state.gearReadResult?.takeUnless { it.error != null }?.let {
+                            Text(
+                                buildString {
+                                    append("基础档=")
+                                    append(it.baseGear?.toString() ?: "--")
+                                    append(" · cosa=")
+                                    append(it.cosa?.toString() ?: "--")
+                                    append(" · 计算=")
+                                    append(it.calculatedGear?.toString() ?: "--")
+                                    append(" · chargeVal=")
+                                    append(it.chargeVal?.toString() ?: "--")
+                                },
+                                color = Cyan,
+                                fontSize = 8.sp,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                            Text(
+                                "公式：基础档 + cosa = 计算档位 · 来源：" +
+                                    (it.source ?: "系统 Thermal Levels + cosa_ctc_value"),
+                                color = TextSecondary,
+                                fontSize = 8.sp,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
                         state.gearReadResult?.let {
                             Text(
                                 SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it.readAtMillis)),

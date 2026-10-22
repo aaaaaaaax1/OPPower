@@ -9,6 +9,7 @@ import com.oppower.model.ControlTier
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.RuleEngine
 import com.oppower.model.ThermalPolicy
+import com.oppower.model.ThermalStatus
 
 interface ChargingGateway {
     val isAvailable: Boolean
@@ -17,6 +18,8 @@ interface ChargingGateway {
     fun readGlobal(name: String): String
     fun putGlobal(name: String, value: Int)
     fun readThermalPolicy(): String
+    fun readThermalStatus(): String
+    fun requestThermalPolicyRefresh(): Boolean
 }
 
 class ChargingController(
@@ -28,15 +31,13 @@ class ChargingController(
     private var lastFull = false
     private var currentCosa = 0
     private var cosaInitialized = false
-    private var appliedGear: Int? = null
-    private var lastConfirmedGear: Int? = null
-    private var lastUserRequestedGear: Int? = null
+    private var lastAppliedGear: Int? = null
+    private var lastObservedGear: Int? = null
     private var appliedTier: ControlTier? = null
     private var temperatureCandidateGear: Int? = null
     private var temperatureCandidateSince = 0L
     private var controlSettingsSnapshot: ControlSettings? = null
     private var pausedFromGear: Int? = null
-    private var forceRefreshRequested = true
 
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
@@ -98,12 +99,11 @@ class ChargingController(
             )
             val requested = decision.targetGear
             if (requested == null) {
-                lastUserRequestedGear = null
                 if (appliedTier == ControlTier.PAUSED && pausedFromGear != null) {
                     return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
                 }
-                val current = appliedGear ?: pausedFromGear
-                if (appliedGear == null && pausedFromGear != null) {
+                val current = lastAppliedGear ?: pausedFromGear
+                if (lastAppliedGear == null && pausedFromGear != null) {
                     return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
                 }
                 if (current == null) {
@@ -120,7 +120,7 @@ class ChargingController(
                         "温度达到暂停阈值 · 持续 $holdSeconds 秒后暂停",
                         desiredGear = current,
                         appliedCosa = currentCosa,
-                        observedGear = lastConfirmedGear,
+                        observedGear = lastObservedGear,
                     )
                 }
                 if (now - temperatureCandidateSince < holdSeconds * 1_000L) {
@@ -129,7 +129,7 @@ class ChargingController(
                         "温度达到暂停阈值 · 等待确认（$holdSeconds 秒）",
                         desiredGear = current,
                         appliedCosa = currentCosa,
-                        observedGear = lastConfirmedGear,
+                        observedGear = lastObservedGear,
                     )
                 }
                 restoreBoth()
@@ -142,77 +142,82 @@ class ChargingController(
             if (target == null) {
                 return ControllerStatus(
                     ControllerPhase.ACTIVE,
-                    "等待 ${if (requested > (appliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
+                    "等待 ${if (requested > (lastAppliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
                     desiredGear = requested,
                     appliedCosa = currentCosa,
-                    observedGear = lastConfirmedGear,
+                    observedGear = lastObservedGear,
                 )
             }
 
-            val policy = readPolicy()
-            val observedGear = policy.gear
-            if (observedGear == null) {
-                return ControllerStatus(
-                    ControllerPhase.ACTIVE,
-                    "系统暂未返回实际档位 · 保留当前偏移并继续跟踪",
-                    desiredGear = target,
-                    appliedCosa = currentCosa,
-                    observedGear = null,
-                )
-            }
-
-            if (observedGear == target) {
-                appliedGear = target
-                lastUserRequestedGear = target
-                lastConfirmedGear = target
-                forceRefreshRequested = false
-                return ControllerStatus(
-                    ControllerPhase.ACTIVE,
-                    "${decision.reason} · 实际档位已达到目标 $target",
-                    desiredGear = target,
-                    appliedCosa = currentCosa,
-                    observedGear = observedGear,
-                    verified = true,
-                )
-            }
-
-            val targetChanged = forceRefreshRequested || lastUserRequestedGear != target
-            // Every cycle is applied immediately. A stale hardware echo is still
-            // processed on the next cycle; there is no debounce or grace window.
-            // Closed-loop correction: the target gear is the acceptance signal.
-            // Re-read the live setting so external or failed writes cannot leave
-            // a stale control value, then replace it without passing through 0.
             shizuku.readGlobal("cosa_ctc_value").toIntOrNull()?.let { currentCosa = it }
-            val correctedCosa = (currentCosa + target - observedGear).coerceIn(COSA_MIN, COSA_MAX)
-            if (correctedCosa == currentCosa && !targetChanged) {
-                return ControllerStatus(
-                    ControllerPhase.ACTIVE,
-                    "实际 gear $observedGear 尚未达到 $target · cosa 已到安全边界 $currentCosa",
-                    desiredGear = target,
-                    appliedCosa = currentCosa,
-                    observedGear = observedGear,
+            val thermalStatus = readThermalStatus()
+            val baseGear = thermalStatus.baseGear
+                ?: throw IllegalStateException("系统热控基础档位暂未返回")
+            val chargeVal = runCatching { readPolicy().chargeVal }.getOrNull()
+            val resolvedBeforeWrite = GearCalculator.resolve(
+                policy = ThermalPolicy(chargeVal = chargeVal),
+                thermalStatus = thermalStatus,
+                cosa = currentCosa,
+            )
+
+            // The target is calculated only from the live thermal base and cosa.
+            // policy.gear is deliberately ignored, including stale cached values.
+            val desiredCosa = GearCalculator.cosaForTarget(target, baseGear)
+                ?: throw IllegalStateException(
+                    "目标 gear $target 不可达：基础档=$baseGear，所需 cosa=" +
+                        (target - baseGear) +
+                        "，安全范围 ${GearCalculator.COSA_MIN}..${GearCalculator.COSA_MAX}",
                 )
-            }
-            val wrote = writeCosa(correctedCosa, force = targetChanged)
-            appliedGear = target
-            lastUserRequestedGear = target
+
+            val needsApply = currentCosa != desiredCosa || lastAppliedGear != target
+            val wrote = if (needsApply && currentCosa != desiredCosa) writeCosa(desiredCosa) else false
+            val refreshRequested = if (needsApply) requestThermalRefresh() else false
+            val calculatedGear = baseGear + currentCosa
+            val verified = calculatedGear == target
+
+            lastAppliedGear = target
+            lastObservedGear = calculatedGear
+
             return ControllerStatus(
                 ControllerPhase.ACTIVE,
                 buildString {
-                    append("实际 gear $observedGear → 目标 $target")
-                    if (wrote) append(" · 已直接写入 cosa=$currentCosa")
+                    append(
+                        when {
+                            wrote && refreshRequested ->
+                                "目标 cosa 已写入，计算档位已达到 $target，已触发一次系统重算"
+                            wrote ->
+                                "目标 cosa 已写入，计算档位=$target，但系统重算触发失败"
+                            refreshRequested -> "基础档变化，已按公式重算 cosa 并触发系统重算"
+                            verified -> "计算档位已达到目标 $target"
+                            else -> "已按基础档和 cosa 更新计算档位"
+                        },
+                    )
+                    append(" · 计算档位=")
+                    append(calculatedGear)
+                    append(" · 基础档=")
+                    append(baseGear)
+                    append(" · cosa=")
+                    append(currentCosa)
+                    append(" · 目标=")
+                    append(target)
+                    chargeVal?.let { append(" · chargeVal=$it") }
                 },
                 desiredGear = target,
                 appliedCosa = currentCosa,
-                observedGear = observedGear,
+                observedGear = calculatedGear,
+                baseGear = baseGear,
+                calculatedGear = calculatedGear,
+                chargeVal = chargeVal,
+                gearSource = resolvedBeforeWrite.source,
+                verified = verified,
             )
         }.getOrElse { error ->
             ControllerStatus(
                 ControllerPhase.ERROR,
                 "控制暂时中断，已保持当前设置：${error.message ?: error.javaClass.simpleName}",
-                desiredGear = appliedGear,
+                desiredGear = lastAppliedGear,
                 appliedCosa = currentCosa,
-                observedGear = lastConfirmedGear,
+                observedGear = lastObservedGear,
             )
         }
     }
@@ -222,7 +227,26 @@ class ChargingController(
         if (!shizuku.isAvailable || !shizuku.hasPermission) {
             throw IllegalStateException("请先完成 Shizuku 授权")
         }
-        return readPolicy().gear
+        val cosa = shizuku.readGlobal("cosa_ctc_value").toIntOrNull()
+        return GearCalculator.resolve(
+            policy = ThermalPolicy(),
+            thermalStatus = readThermalStatus(),
+            cosa = cosa,
+        ).gear
+    }
+
+    @Synchronized
+    fun readResolvedGear(): ResolvedGear {
+        if (!shizuku.isAvailable || !shizuku.hasPermission) {
+            throw IllegalStateException("请先完成 Shizuku 授权")
+        }
+        val cosa = shizuku.readGlobal("cosa_ctc_value").toIntOrNull()
+        val chargeVal = runCatching { readPolicy().chargeVal }.getOrNull()
+        return GearCalculator.resolve(
+            policy = ThermalPolicy(chargeVal = chargeVal),
+            thermalStatus = readThermalStatus(),
+            cosa = cosa,
+        )
     }
 
     @Synchronized
@@ -236,8 +260,8 @@ class ChargingController(
     fun resetSession() {
         sessionSocLocked = false
         lastFull = false
-        appliedGear = null
-        lastUserRequestedGear = null
+        lastAppliedGear = null
+        lastObservedGear = null
         appliedTier = null
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
@@ -250,7 +274,7 @@ class ChargingController(
         settings: RuntimeSettings,
         tier: ControlTier,
     ): Int? {
-        val current = appliedGear ?: pausedFromGear
+        val current = lastAppliedGear ?: pausedFromGear
         val now = System.currentTimeMillis()
         val controlSettings = ControlSettings(
             baseTier = settings.baseTier,
@@ -265,11 +289,10 @@ class ChargingController(
             return requested
         }
 
-        // User rule and base-tier changes have no debounce. Return the new
-        // target immediately so the closed loop can replace the current cosa
-        // value on this cycle.
+        // User rule and base-tier changes are applied on this cycle. The closed
+        // loop writes the dynamically calculated cosa exactly once and never
+        // clears to zero while moving between targets.
         if (controlSettingsChanged) {
-            forceRefreshRequested = true
             temperatureCandidateGear = null
             temperatureCandidateSince = 0L
             appliedTier = tier
@@ -277,7 +300,7 @@ class ChargingController(
             return requested
         }
 
-        if (appliedGear != null && requested == current) {
+        if (lastAppliedGear != null && requested == current) {
             appliedTier = tier
             temperatureCandidateGear = null
             temperatureCandidateSince = 0L
@@ -305,6 +328,7 @@ class ChargingController(
             requested
         } else null
     }
+
     private fun initializeFromDevice() {
         if (cosaInitialized) return
         currentCosa = shizuku.readGlobal("cosa_ctc_value").toIntOrNull() ?: 0
@@ -317,40 +341,41 @@ class ChargingController(
 
     private fun restoreOffset() {
         if (!cosaInitialized) initializeFromDevice()
-        if (currentCosa != 0) writeCosa(0)
-        lastUserRequestedGear = null
-        appliedGear = null
+        val wrote = if (currentCosa != 0) writeCosa(0) else false
+        if (wrote) requestThermalRefresh()
+        lastAppliedGear = null
+        lastObservedGear = null
         appliedTier = null
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
         pausedFromGear = null
         controlSettingsSnapshot = null
-        forceRefreshRequested = true
     }
 
-    private fun writeCosa(value: Int, force: Boolean = false): Boolean {
-        if (!force && currentCosa == value) return false
+    private fun writeCosa(value: Int): Boolean {
+        if (currentCosa == value) return false
         shizuku.putGlobal("cosa_ctc_value", value)
         val readBack = shizuku.readGlobal("cosa_ctc_value").toIntOrNull()
         if (readBack != value) throw IllegalStateException("cosa 回读不一致")
         currentCosa = value
-        forceRefreshRequested = false
         return true
     }
 
+    private fun requestThermalRefresh(): Boolean =
+        runCatching { shizuku.requestThermalPolicyRefresh() }.getOrDefault(false)
+
     private fun readPolicy(): ThermalPolicy {
         val raw = shizuku.readThermalPolicy()
-        val gear = Regex("gearVal:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val charge = Regex("chargeVal:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val speed = Regex("speedChargeAdd:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val category = Regex("categoryName:\\s*([^\\n]+)").find(raw)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        return ThermalPolicy(raw, category, gear, charge, speed)
+        return ThermalPolicy(raw = raw, chargeVal = charge, speedChargeAdd = speed)
     }
+
+    private fun readThermalStatus(): ThermalStatus =
+        GearCalculator.parseThermalStatus(shizuku.readThermalStatus())
 
     private companion object {
         const val TEMPERATURE_PAUSE_CANDIDATE = -1
-        const val COSA_MIN = -9
-        const val COSA_MAX = 9
     }
 
     private data class ControlSettings(

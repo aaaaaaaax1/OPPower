@@ -125,6 +125,25 @@ class ShizukuGateway(context: Context) : ChargingGateway {
     override fun readThermalPolicy(): String =
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy")
 
+    override fun readThermalStatus(): String =
+        execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus")
+
+    /**
+     * ThermalControlUtils observes this system setting and calls m2() when its
+     * value changes. Rewriting the same integer with an equivalent textual
+     * representation (0/00 or 1/01) triggers exactly one policy recomputation
+     * without changing the camera state seen by Android.
+     */
+    override fun requestThermalPolicyRefresh(): Boolean {
+        val current = execute("settings get system oplus_camera_3rd_activity").trim()
+        val numeric = current.toIntOrNull() ?: return false
+        val alias = thermalRefreshAlias(current) ?: return false
+        execute("settings put system oplus_camera_3rd_activity $alias")
+        return execute("settings get system oplus_camera_3rd_activity")
+            .trim()
+            .toIntOrNull() == numeric
+    }
+
     private fun execute(command: String): String = awaitService().execute(command)
 
     private fun awaitService(): IPrivilegedCommandService {
@@ -148,4 +167,12 @@ class ShizukuGateway(context: Context) : ChargingGateway {
     companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     }
+}
+
+internal fun thermalRefreshAlias(current: String): String? = when (current.trim()) {
+    "0" -> "00"
+    "00" -> "0"
+    "1" -> "01"
+    "01" -> "1"
+    else -> null
 }

@@ -1,0 +1,15 @@
+OPPower 1.0.0-beta6
+versionCode=6
+built=2026-10-23 01:53:47 +08:00
+apk=OPPower-1.0.0-beta6-debug.apk
+sha256=D1A48BBE9FC52DC12C260DC5D7212118CF72C671FE4CD093E5722F038ED15AC3
+
+Changes:
+- Removed repeated same-target writes and the 3-second retry/refresh behavior.
+- Each target now uses the fixed safe mapping (gear 0..5 -> cosa -9,-8,-7,-6,-4,-3) and is written once without passing through cosa=0.
+- Added one-shot thermal policy refresh by toggling an equivalent textual form of oplus_camera_3rd_activity (0/00 or 1/01); the numeric camera state does not change.
+- The thermal observer calls ThermalControlUtils.g1() and schedules m2() once. If the policy cache stays stale, OPPower keeps reading every second without rewriting or rescheduling.
+- Actual gear is now always policy.gear. cosa and chargeVal are diagnostics only; UI text changed from effective gear to current actual gear.
+- Restoring cosa=0 on unplug/disable also triggers one system recomputation.
+- Unit tests: 24, failures: 0, errors: 0; lint: 0 errors, 20 warnings; debug assembly passed.
+- Real-device check after installation confirmed that the equivalent-text refresh write reaches ThermalControlUtils and the policy cache changes. Target-gear verification is still pending because the phone was unplugged and another foreground app was active.
