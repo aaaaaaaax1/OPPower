@@ -19,8 +19,8 @@ class KeepAliveOverlay(private val context: Context) {
         if (view != null) return
         val overlay = View(context)
         val params = WindowManager.LayoutParams(
-            1,
-            1,
+            2,
+            2,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -28,9 +28,13 @@ class KeepAliveOverlay(private val context: Context) {
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
+            // Keep the invisible keep-alive window inside the display's safe
+            // gesture area. A 1px window at (0, 0) can collide with the system's
+            // top gesture region and make the foreground app appear to vanish.
+            gravity = Gravity.BOTTOM or Gravity.END
+            x = 24
+            y = 48
+            alpha = 0.01f
         }
         runCatching {
             windowManager.addView(overlay, params)

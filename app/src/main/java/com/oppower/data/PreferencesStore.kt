@@ -41,8 +41,16 @@ class PreferencesStore(context: Context) {
             liveNotificationEnabled = prefs.getBoolean("live_notification", true),
             historyEnabled = prefs.getBoolean("history_enabled", true),
             resumeAfterReboot = prefs.getBoolean("resume_after_reboot", true),
-            temperatureDownshiftSeconds = prefs.getInt("temp_down_seconds", 15),
-            temperatureUpshiftSeconds = prefs.getInt("temp_up_seconds", 30),
+            temperatureDownshiftSeconds = if (prefs.getBoolean("timing_profile_v2", false)) {
+                prefs.getInt("temp_down_seconds", 5)
+            } else {
+                5
+            },
+            temperatureUpshiftSeconds = if (prefs.getBoolean("timing_profile_v2", false)) {
+                prefs.getInt("temp_up_seconds", 8)
+            } else {
+                8
+            },
             socDownshiftSeconds = prefs.getInt("soc_down_seconds", 10),
             socUpshiftSeconds = prefs.getInt("soc_up_seconds", 30),
             themeMode = enumValue(prefs.getString("theme_mode", null), ThemeMode.DARK),
@@ -92,6 +100,7 @@ class PreferencesStore(context: Context) {
             .putInt("soc_stop", settings.customRules.socStopPercent)
             .putInt("temp_down_seconds", settings.temperatureDownshiftSeconds)
             .putInt("temp_up_seconds", settings.temperatureUpshiftSeconds)
+            .putBoolean("timing_profile_v2", true)
             .putInt("soc_down_seconds", settings.socDownshiftSeconds)
             .putInt("soc_up_seconds", settings.socUpshiftSeconds)
             .putString("theme_mode", settings.themeMode.name)

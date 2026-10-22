@@ -153,7 +153,7 @@ private fun SettingsHomePage(
             SettingsMenuRow(
                 icon = "◐",
                 title = "外观设置",
-                summary = "${state.settings.themeMode.label} · ${state.settings.themePalette.label}",
+                summary = "${state.settings.themeMode.label} · ${state.settings.themePalette.label} · ${fontSizeLabel(state.settings.fontScale)}",
                 onClick = { onNavigate(SettingsScreen.APPEARANCE) },
             )
             SettingsDivider()
@@ -218,22 +218,27 @@ private fun SettingsHomePage(
 
         Surface(
             modifier = Modifier.fillMaxWidth().clickable(onClick = onJoinQq),
-            color = Surface,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, Outline),
+            color = AccentSurface,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, Cyan.copy(alpha = 0.42f)),
             shadowElevation = 2.dp,
         ) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = SurfaceRaised, shape = RoundedCornerShape(8.dp)) {
-                    Text("Q", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(9.dp))
-                }
+            Row(Modifier.padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                SettingsGlyph("Q", false)
                 Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
-                    Text("加入 OPPower 用户群", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Text("群号 $QQ_GROUP_NUMBER · 点击复制并打开 QQ", color = TextSecondary, fontSize = 10.sp)
+                    Text("加入 OPPower 用户群", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("群号 $QQ_GROUP_NUMBER · 点击复制并打开 QQ", color = TextSecondary, fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
                 }
-                Text("›", color = TextSecondary, fontSize = 20.sp)
+                Text("›", color = Cyan, fontSize = 18.sp)
             }
         }
+        Text(
+            "所有可见设置入口均已接入功能；未实现的项目不会显示为空入口。",
+            color = TextSecondary,
+            fontSize = 8.sp,
+            lineHeight = 12.sp,
+            modifier = Modifier.padding(start = 3.dp, top = 1.dp),
+        )
     }
 }
 
@@ -326,10 +331,18 @@ private fun NotificationSettingsPage(
                 value = if (notificationsEnabled(context)) "已允许" else "前往设置",
                 onClick = { openNotificationSettings(context) },
             )
+            if (Build.VERSION.SDK_INT >= 36) {
+                SettingsDivider()
+                SettingActionRow(
+                    title = "流体云实时活动",
+                    value = "在系统通知页开启",
+                    onClick = { openNotificationSettings(context) },
+                )
+            }
         }
 
         SettingsSection("通知内容") {
-            SettingSwitchRow("显示电量百分比", "", settings.notificationShowBatteryPercent) { value ->
+            SettingSwitchRow("显示电量", "百分比", settings.notificationShowBatteryPercent) { value ->
                 onSettingsChange { it.copy(notificationShowBatteryPercent = value) }
             }
             SettingsDivider()
@@ -343,10 +356,6 @@ private fun NotificationSettingsPage(
             SettingsDivider()
             SettingSwitchRow("显示温度", "", settings.notificationShowTemperature) { value ->
                 onSettingsChange { it.copy(notificationShowTemperature = value) }
-            }
-            SettingsDivider()
-            SettingSwitchRow("显示供电方式", "", settings.notificationShowSupply) { value ->
-                onSettingsChange { it.copy(notificationShowSupply = value) }
             }
             SettingsDivider()
             SettingSwitchRow("功率只显示整数", "小于 1 W 时仍保留小数", settings.notificationIntegerPower) { value ->
@@ -849,15 +858,15 @@ private fun SettingsPage(
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 2.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(title, color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
         Surface(
             color = Surface,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             border = BorderStroke(1.dp, Outline),
             shadowElevation = 2.dp,
         ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 2.dp), content = content)
+            Column(Modifier.fillMaxWidth(), content = content)
         }
     }
 }
@@ -871,20 +880,43 @@ private fun SettingsMenuRow(
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 11.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(30.dp).background(if (accent) AmberSurface else SurfaceRaised, RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(icon, color = if (accent) Amber else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        }
+        SettingsGlyph(icon, accent)
         Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
             Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(summary, color = if (accent) Amber else TextSecondary, fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
         }
-        Text("›", color = TextSecondary, fontSize = 19.sp)
+        Text("›", color = TextSecondary, fontSize = 18.sp)
+    }
+}
+
+@Composable
+private fun SettingsGlyph(icon: String, warm: Boolean) {
+    Surface(
+        color = when {
+            warm -> AmberSurface
+            icon == "◐" -> Color(0xFF24262D)
+            icon == "◎" || icon == "⌁" -> Color(0xFF26271F)
+            else -> AccentSurface
+        },
+        shape = RoundedCornerShape(9.dp),
+        border = BorderStroke(1.dp, Outline.copy(alpha = 0.9f)),
+    ) {
+        Box(Modifier.size(31.dp), contentAlignment = Alignment.Center) {
+            Text(
+                icon,
+                color = when {
+                    warm -> Amber
+                    icon == "◐" -> Color(0xFFB9BFD4)
+                    icon == "◎" || icon == "⌁" -> Amber
+                    else -> Cyan
+                },
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }
 
@@ -895,7 +927,7 @@ private fun SettingSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             if (description.isNotBlank()) {
@@ -914,27 +946,31 @@ private fun SettingActionRow(
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(horizontal = 11.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, color = if (enabled) TextPrimary else TextSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
-        Text(value, color = if (enabled) Cyan else TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Column(Modifier.weight(1f)) {
+            Text(title, color = if (enabled) TextPrimary else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            if (value.isNotBlank()) {
+                Text(value, color = if (enabled) Cyan else TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp))
+            }
+        }
         Text(" ›", color = TextSecondary, fontSize = 13.sp)
     }
 }
 
 @Composable
 private fun StatusRow(title: String, value: String, good: Boolean) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(7.dp).background(if (good) Cyan else Amber, CircleShape))
         Text(title, color = TextPrimary, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(start = 9.dp))
-        Text(value, color = if (good) Cyan else Amber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text(value, color = if (good) Cyan else Amber, fontSize = 9.sp, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
 private fun DebugRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 5.dp)) {
         Text(label, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
         Text(value, color = TextPrimary, fontSize = 9.sp)
     }
@@ -942,7 +978,7 @@ private fun DebugRow(label: String, value: String) {
 
 @Composable
 private fun SettingLabel(text: String) {
-    Text(text, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 9.dp, bottom = 2.dp))
+    Text(text, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 2.dp))
 }
 
 @Composable
@@ -953,7 +989,7 @@ private fun <T> ChoiceGrid(
     onSelect: (T) -> Unit,
     columns: Int = 3,
 ) {
-    Column(Modifier.padding(vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         options.chunked(columns).forEach { rowOptions ->
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 rowOptions.forEach { option ->
@@ -964,13 +1000,15 @@ private fun <T> ChoiceGrid(
                         shape = RoundedCornerShape(8.dp),
                         border = BorderStroke(1.dp, if (isSelected) Cyan else Outline),
                     ) {
-                        Text(
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+                            Text(
                             label(option),
                             color = if (isSelected) Cyan else TextPrimary,
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 9.dp),
+                            maxLines = 1,
                         )
+                        }
                     }
                 }
                 repeat(columns - rowOptions.size) { Spacer(Modifier.weight(1f)) }
@@ -981,7 +1019,13 @@ private fun <T> ChoiceGrid(
 
 @Composable
 private fun SettingsDivider(modifier: Modifier = Modifier) {
-    HorizontalDivider(modifier = modifier, color = Outline)
+    HorizontalDivider(modifier = modifier.padding(horizontal = 11.dp), color = Outline)
+}
+
+private fun fontSizeLabel(scale: Float): String = when {
+    scale < 0.95f -> "较小字号"
+    scale > 1.05f -> "较大字号"
+    else -> "标准字号"
 }
 
 private fun notificationsEnabled(context: Context): Boolean =

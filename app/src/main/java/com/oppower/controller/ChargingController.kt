@@ -1,6 +1,7 @@
 package com.oppower.controller
 
 import com.oppower.model.BatterySnapshot
+import com.oppower.model.BaseTier
 import com.oppower.model.ControllerPhase
 import com.oppower.model.ControllerStatus
 import com.oppower.model.ControlTier
@@ -31,6 +32,8 @@ class ChargingController(
     private var appliedTier: ControlTier? = null
     private var temperatureCandidateGear: Int? = null
     private var temperatureCandidateSince = 0L
+    private var lastBaseTier: BaseTier? = null
+    private var pausedFromGear: Int? = null
 
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
@@ -93,7 +96,43 @@ class ChargingController(
             val requested = decision.targetGear
             if (requested == null) {
                 lastUserRequestedGear = null
+                if (appliedTier == ControlTier.PAUSED && pausedFromGear != null) {
+                    return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
+                }
+                val current = appliedGear ?: pausedFromGear
+                if (appliedGear == null && pausedFromGear != null) {
+                    return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
+                }
+                if (current == null) {
+                    restoreBoth()
+                    return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
+                }
+                val now = System.currentTimeMillis()
+                val holdSeconds = settings.temperatureDownshiftSeconds.coerceAtLeast(1)
+                if (temperatureCandidateGear != TEMPERATURE_PAUSE_CANDIDATE) {
+                    temperatureCandidateGear = TEMPERATURE_PAUSE_CANDIDATE
+                    temperatureCandidateSince = now
+                    return ControllerStatus(
+                        ControllerPhase.ACTIVE,
+                        "温度达到暂停阈值 · 持续 $holdSeconds 秒后暂停",
+                        desiredGear = current,
+                        appliedCosa = currentCosa,
+                        observedGear = lastConfirmedGear,
+                    )
+                }
+                if (now - temperatureCandidateSince < holdSeconds * 1_000L) {
+                    return ControllerStatus(
+                        ControllerPhase.ACTIVE,
+                        "温度达到暂停阈值 · 等待确认（$holdSeconds 秒）",
+                        desiredGear = current,
+                        appliedCosa = currentCosa,
+                        observedGear = lastConfirmedGear,
+                    )
+                }
                 restoreBoth()
+                pausedFromGear = current
+                appliedTier = ControlTier.PAUSED
+                lastBaseTier = settings.baseTier
                 return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
             }
 
@@ -104,7 +143,7 @@ class ChargingController(
                 return ControllerStatus(
                     ControllerPhase.ACTIVE,
                     if (debouncing) {
-                        "等待最新档位 · 停止操作 3 秒后校准"
+                        "等待最新档位 · 停止操作 1.5 秒后校准"
                     } else {
                         "等待 ${if (requested > (appliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}"
                     },
@@ -275,6 +314,8 @@ class ChargingController(
         appliedTier = null
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
+        lastBaseTier = null
+        pausedFromGear = null
     }
 
     private fun confirmGear(
@@ -282,8 +323,11 @@ class ChargingController(
         settings: RuntimeSettings,
         tier: ControlTier,
     ): Int? {
-        val current = appliedGear
+        val current = appliedGear ?: pausedFromGear
         val now = System.currentTimeMillis()
+        val previousBaseTier = lastBaseTier
+        val baseTierChanged = previousBaseTier != null && previousBaseTier != settings.baseTier
+        if (lastBaseTier == null) lastBaseTier = settings.baseTier
         if (current == null) {
             pendingGear = null
             lastUserRequestedGear = requested
@@ -291,7 +335,40 @@ class ChargingController(
             appliedTier = tier
             return requested
         }
-        if (requested == current) {
+
+        // Finish a pending user tier change after the trailing window. Each new
+        // tap restarts this window, so only the final selected tier is written.
+        if (pendingGear != null) {
+            if (pendingGear != requested) {
+                pendingGear = requested
+                pendingSince = now
+                return null
+            }
+            if (now - pendingSince < SETTINGS_DEBOUNCE_MS) return null
+            pendingGear = null
+            rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
+            appliedTier = tier
+            pausedFromGear = null
+            return requested
+        }
+
+        if (baseTierChanged) {
+            lastBaseTier = settings.baseTier
+            temperatureCandidateGear = null
+            temperatureCandidateSince = 0L
+            lastUserRequestedGear = requested
+            appliedTier = tier
+            if (now >= rapidSwitchWindowUntil) {
+                rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
+                pausedFromGear = null
+                return requested
+            }
+            pendingGear = requested
+            pendingSince = now
+            return null
+        }
+
+        if (appliedGear != null && requested == current) {
             pendingGear = null
             lastUserRequestedGear = requested
             appliedTier = tier
@@ -299,42 +376,10 @@ class ChargingController(
             temperatureCandidateSince = 0L
             return requested
         }
-        if (appliedTier != tier) {
-            temperatureCandidateGear = null
-            temperatureCandidateSince = 0L
-            if (lastUserRequestedGear != requested) {
-                lastUserRequestedGear = requested
-                pendingGear = requested
-                pendingSince = now
-                // The first deliberate tier change applies immediately. Further
-                // changes inside the next three seconds use a trailing debounce
-                // so the last selected tier wins without writing every tap.
-                if (now >= rapidSwitchWindowUntil) {
-                    pendingGear = null
-                    rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
-                    appliedTier = tier
-                    return requested
-                }
-                return null
-            }
-            if (pendingGear != requested) {
-                pendingGear = requested
-                pendingSince = now
-                return null
-            }
-            return if (now - pendingSince >= SETTINGS_DEBOUNCE_MS) {
-                pendingGear = null
-                rapidSwitchWindowUntil = now + SETTINGS_DEBOUNCE_MS
-                appliedTier = tier
-                requested
-            } else {
-                null
-            }
-        }
 
-        // Temperature movement inside the same large tier changes the concrete
-        // gear only after it remains stable for the configured confirmation time.
-        // This prevents 0.5°C boundary jitter from repeatedly rewriting cosa.
+        // Temperature movement, including a transition between large tiers and
+        // recovery from a temperature pause, changes the concrete gear only after
+        // it remains stable for the configured confirmation time.
         if (temperatureCandidateGear != requested) {
             temperatureCandidateGear = requested
             temperatureCandidateSince = now
@@ -348,6 +393,8 @@ class ChargingController(
         return if (now - temperatureCandidateSince >= confirmSeconds * 1_000L) {
             temperatureCandidateGear = null
             temperatureCandidateSince = 0L
+            appliedTier = tier
+            pausedFromGear = null
             requested
         } else null
     }
@@ -418,6 +465,7 @@ class ChargingController(
         appliedTier = null
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
+        pausedFromGear = null
     }
 
     private fun writeCosa(value: Int) {
@@ -438,7 +486,8 @@ class ChargingController(
     }
 
     private companion object {
-        const val SETTINGS_DEBOUNCE_MS = 3_000L
+        const val SETTINGS_DEBOUNCE_MS = 1_500L
         const val DEVIATION_CONFIRM_MS = 1_000L
+        const val TEMPERATURE_PAUSE_CANDIDATE = -1
     }
 }

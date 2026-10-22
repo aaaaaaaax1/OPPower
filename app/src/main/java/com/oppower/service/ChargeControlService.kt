@@ -9,10 +9,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
+import android.os.Bundle
 import android.os.PowerManager
 import android.os.BatteryManager
+import androidx.annotation.RequiresApi
 import com.oppower.MainActivity
 import com.oppower.R
 import com.oppower.battery.BatteryReader
@@ -44,6 +47,7 @@ class ChargeControlService : Service() {
     private lateinit var prefs: PreferencesStore
     private lateinit var historyStore: ChartHistoryStore
     private lateinit var overlay: KeepAliveOverlay
+    private lateinit var overlayScope: CoroutineScope
     private var foregroundStarted = false
     private var screenOn = true
     private var lastNotificationText = ""
@@ -68,6 +72,7 @@ class ChargeControlService : Service() {
         prefs = PreferencesStore(this)
         historyStore = ChartHistoryStore(this)
         overlay = KeepAliveOverlay(this)
+        overlayScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         screenOn = getSystemService(PowerManager::class.java).isInteractive
         registerReceiver(
             screenReceiver,
@@ -76,27 +81,48 @@ class ChargeControlService : Service() {
                 addAction(Intent.ACTION_SCREEN_OFF)
             },
         )
-        ChartHistoryBus.points.value = historyStore.load()
         createChannel()
         val initialSettings = prefs.load()
         val initialBattery = batteryReader.snapshot(initialSettings)
-        if (initialSettings.masterEnabled && initialBattery.acOnline) {
+        val shouldRun = initialBattery.acOnline &&
+            (initialSettings.masterEnabled || initialSettings.liveNotificationEnabled)
+        // startForegroundService() requires startForeground() even when the
+        // charger is absent. Call it before the control loop so Android never
+        // kills the process for missing the five-second foreground contract.
+        // The first status sync immediately removes the notification if the
+        // device is unplugged or the master switch is off.
+        if (shouldRun) {
             startForeground(
                 NOTIFICATION_ID,
-                notification("正在启动", "等待充电控制服务", initialBattery),
+                notification("0.0", "等待充电状态", "", initialBattery, initialSettings),
             )
             foregroundStarted = true
+        }
+        if (!shouldRun) {
+            stopSelf()
+            return
         }
         scope.launch {
             while (true) {
                 val settings = prefs.load()
                 val battery = batteryReader.snapshot(settings)
-                val status = controller.evaluate(settings, battery)
+                val status = if (settings.masterEnabled) {
+                    controller.evaluate(settings, battery)
+                } else {
+                    ControllerStatus(ControllerPhase.DISABLED, "亮屏快充未启用")
+                }
                 ChargeControlBus.status.value = status
-                overlay.sync(settings.overlayKeepAliveEnabled)
+                overlayScope.launch { overlay.sync(settings.overlayKeepAliveEnabled) }
                 syncStatusNotification(status, battery, settings)
+                if (!battery.acOnline) {
+                    if (settings.historyEnabled) {
+                        ChartHistoryBus.points.value = historyStore.record(battery)
+                    }
+                    if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    break
+                }
                 val waitMillis = when {
-                    !battery.acOnline -> 30_000L
                     status.phase == ControllerPhase.ERROR -> 10_000L
                     else -> 2_000L
                 }
@@ -106,18 +132,29 @@ class ChargeControlService : Service() {
                 if (settings.historyEnabled) {
                     ChartHistoryBus.points.value = historyStore.record(batteryReader.snapshot(settings))
                 }
-                if (!settings.masterEnabled) {
-                    if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                    break
-                }
             }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // This also covers a second startForegroundService() while the service
+        // already exists in the background (for example, when AC is connected).
+        val startSettings = prefs.load()
+        val startBattery = batteryReader.snapshot(startSettings)
+        if (!foregroundStarted && (startSettings.masterEnabled || startSettings.liveNotificationEnabled)) {
+            if (startBattery.acOnline) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification("0.0", "等待充电状态", "", startBattery, startSettings),
+                )
+                foregroundStarted = true
+            } else {
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+        }
         if (intent?.action == ACTION_RESUME_NOTIFICATION) {
-            if (!prefs.load().masterEnabled) return START_NOT_STICKY
+            if (!prefs.load().liveNotificationEnabled) return START_NOT_STICKY
             ChargeControlBus.requestUpdate()
             return START_STICKY
         }
@@ -155,6 +192,7 @@ class ChargeControlService : Service() {
             message = "控制服务已停止",
         )
         scope.cancel()
+        if (::overlayScope.isInitialized) overlayScope.cancel()
         super.onDestroy()
     }
 
@@ -167,6 +205,22 @@ class ChargeControlService : Service() {
         force: Boolean = false,
     ) {
         if (!settings.masterEnabled || !battery.acOnline) {
+            if (settings.liveNotificationEnabled && battery.acOnline) {
+                val power = notificationPower(battery, settings)
+                val data = notificationBatteryData(battery, settings)
+                val tier = "亮屏快充未启用"
+                val notification = notification(power, data, tier, battery, settings)
+                if (!foregroundStarted) {
+                    startForeground(NOTIFICATION_ID, notification)
+                    foregroundStarted = true
+                } else {
+                    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+                }
+                lastNotificationText = "$data\n$tier"
+                lastNotificationTitle = power
+                lastNotificationAt = System.currentTimeMillis()
+                return
+            }
             getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
             if (foregroundStarted) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -183,16 +237,19 @@ class ChargeControlService : Service() {
         val detailAllowed = settings.liveNotificationEnabled &&
             !(settings.notificationAutoCloseOnFull && full) &&
             !(settings.notificationAutoCloseOnScreenOff && !screenOn)
-        val title = if (detailAllowed) notificationPower(battery, settings) else "OPPower · 后台保护"
-        val text = if (detailAllowed) {
-            notificationText(status, battery, settings)
+        val power = notificationPower(battery, settings)
+        val data = if (detailAllowed) {
+            notificationBatteryData(battery, settings)
         } else {
             if (full) {
-                "已充满 · 充电增强已交还系统 · 点击查看"
+                "已充满 · 充电增强已交还系统"
             } else {
-                "亮屏快充保护正在运行 · 点击查看"
+                "亮屏快充保护正在运行"
             }
         }
+        val tier = if (detailAllowed) powerTierLabel(status.desiredGear) else ""
+        val title = power
+        val text = "$data\n$tier"
         val now = System.currentTimeMillis()
         val interval = if (screenOn) {
             settings.notificationRefreshSeconds.coerceIn(2, 30)
@@ -202,7 +259,7 @@ class ChargeControlService : Service() {
         val refreshMillis = interval * 1_000L
         if (!force && foregroundStarted && text == lastNotificationText && title == lastNotificationTitle) return
         if (!force && foregroundStarted && title == lastNotificationTitle && now - lastNotificationAt < refreshMillis) return
-        val notification = notification(title, text, battery)
+        val notification = notification(power, data, tier, battery, settings)
         if (!foregroundStarted) {
             startForeground(NOTIFICATION_ID, notification)
             foregroundStarted = true
@@ -214,26 +271,25 @@ class ChargeControlService : Service() {
         lastNotificationAt = now
     }
 
-    private fun notificationText(
-        status: ControllerStatus,
+    private fun notificationBatteryData(
         battery: BatterySnapshot,
         settings: RuntimeSettings,
     ): String {
         val values = buildList {
-            add(powerTierLabel(status.desiredGear))
             if (settings.notificationShowBatteryPercent) add("${battery.levelPercent}%")
-            if (settings.notificationShowSupply) add(if (battery.acOnline) "电源适配器" else "电池供电")
-            if (settings.notificationShowVoltage) add("${(battery.voltageMv / 1000f).toString().let { if (it.length < 4) it else it.take(4) }}V")
+            if (settings.notificationShowVoltage) add("${(battery.voltageMv / 1000f).oneDecimal()} V")
             if (settings.notificationShowCurrent) add("${battery.currentMa} mA")
-            if (settings.notificationShowTemperature) add("${battery.temperatureC.oneDecimal()}℃")
+            if (settings.notificationShowTemperature) add("${battery.temperatureC.oneDecimal()}°C")
         }
-        return values.joinToString(" · ")
+        return values.joinToString("  ·  ")
     }
 
     private fun notification(
-        title: String,
-        text: String,
+        power: String,
+        data: String,
+        tier: String,
         battery: BatterySnapshot,
+        settings: RuntimeSettings,
     ): Notification {
         val intent = packageManager.getLaunchIntentForPackage(packageName)
             ?: Intent(this, MainActivity::class.java)
@@ -243,41 +299,94 @@ class ChargeControlService : Service() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_power)
+        val level = battery.levelPercent.coerceIn(0, 100)
+        // LLPower uses a single content line. Keeping this line single-line
+        // prevents ColorOS from turning the notification into an expandable
+        // card with a disclosure arrow.
+        val body = listOf(data, tier).filter { it.isNotBlank() }.joinToString("  ·  ")
+        val usesLiveStyle = Build.VERSION.SDK_INT >= 36
+        val builder = Notification.Builder(this, if (usesLiveStyle) LIVE_CHANNEL_ID else CHANNEL_ID)
+            // Android requires a small icon. ColorOS can replace ordinary
+            .setSmallIcon(R.drawable.ic_notification_transparent)
             .setColor(android.graphics.Color.rgb(121, 214, 193))
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setContentTitle("$power W")
+            .setContentText(body)
             .setContentIntent(pending)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setVisibility(
+                if (usesLiveStyle) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PUBLIC,
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setShowWhen(false)
-            .setProgress(100, battery.levelPercent.coerceIn(0, 100), false)
-            .apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .setShowWhen(usesLiveStyle)
+            .setWhen(if (usesLiveStyle) System.currentTimeMillis() else 0L)
+        if (usesLiveStyle) {
+            builder.setStyle(liveProgressStyle(level))
+        } else {
+            builder.setProgress(100, level, false)
+        }
+        builder.addExtras(
+            Bundle().apply {
+                if (usesLiveStyle) {
+                    putBoolean("android.requestPromotedOngoing", true)
+                } else {
+                    putBoolean("android.app.preferSmallIcon", true)
                 }
-            }
-            .build()
+            },
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+        return builder.build()
     }
+
+    @RequiresApi(36)
+    private fun liveProgressStyle(level: Int): Notification.ProgressStyle =
+        Notification.ProgressStyle()
+            .setProgressTrackerIcon(
+                Icon.createWithResource(this, R.drawable.ic_notification_tracker_dot),
+            )
+            .addProgressSegment(
+                Notification.ProgressStyle.Segment(100)
+                    .setColor(android.graphics.Color.rgb(121, 214, 193)),
+            )
+            .setProgress(level)
 
     private fun notificationPower(battery: BatterySnapshot, settings: RuntimeSettings): String =
         if (settings.notificationIntegerPower && kotlin.math.abs(battery.powerW) >= 1f) {
-            "${battery.powerW.roundToInt()} W"
+            "${battery.powerW.roundToInt()}"
         } else {
-            "${battery.powerW.oneDecimal()} W"
+            battery.powerW.oneDecimal()
         }
 
     private fun createChannel() {
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "亮屏快充状态", NotificationManager.IMPORTANCE_LOW).apply {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "充电状态", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "显示亮屏快充状态、电池功率和充电保护"
                 setShowBadge(false)
+                enableVibration(false)
+                enableLights(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             },
         )
+        if (Build.VERSION.SDK_INT >= 36) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    LIVE_CHANNEL_ID,
+                    "实时充电状态",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = "显示功率、电量、温度与亮屏快充档位"
+                    setShowBadge(false)
+                    enableVibration(false)
+                    enableLights(false)
+                    setSound(null, null)
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                },
+            )
+        }
     }
 
     private fun phaseLabel(phase: ControllerPhase): String = when (phase) {
@@ -292,53 +401,42 @@ class ChargeControlService : Service() {
 
     companion object {
         const val CHANNEL_ID = "charge_control"
+        const val LIVE_CHANNEL_ID = "battery_live_update_v2"
         const val NOTIFICATION_ID = 2108
         const val ACTION_RESTORE_ALL = "com.oppower.action.RESTORE_ALL"
         const val ACTION_HISTORY_SETTING_CHANGED = "com.oppower.action.HISTORY_SETTING_CHANGED"
         const val ACTION_RESUME_NOTIFICATION = "com.oppower.action.RESUME_NOTIFICATION"
 
         fun start(context: Context) {
-            if (!PreferencesStore(context).load().masterEnabled) return
+            val settings = PreferencesStore(context).load()
+            if (!settings.masterEnabled && !settings.liveNotificationEnabled) return
+            val batteryIntent = context.registerReceiver(
+                null,
+                android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+            )
+            val plugged = (batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+            if (!plugged) return
             val intent = Intent(context, ChargeControlService::class.java)
             runCatching {
-                val battery = context.registerReceiver(
-                    null,
-                    IntentFilter(Intent.ACTION_BATTERY_CHANGED),
-                )
-                val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && plugged) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
+                context.startForegroundService(intent)
+            }.onFailure { error ->
+                android.util.Log.e("OPPower", "Unable to start charge control service", error)
             }
         }
 
         fun restore(context: Context) {
             val intent = Intent(context, ChargeControlService::class.java).setAction(ACTION_RESTORE_ALL)
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
-            }
+            runCatching { context.startService(intent) }
         }
 
         fun historySettingsChanged(context: Context) {
             val intent = Intent(context, ChargeControlService::class.java)
                 .setAction(ACTION_HISTORY_SETTING_CHANGED)
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
-            }
+            runCatching { context.startService(intent) }
         }
 
         fun resumeNotification(context: Context) {
-            if (!PreferencesStore(context).load().masterEnabled) return
+            if (!PreferencesStore(context).load().liveNotificationEnabled) return
             context.startService(Intent(context, ChargeControlService::class.java).setAction(ACTION_RESUME_NOTIFICATION))
         }
     }

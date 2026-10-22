@@ -11,7 +11,9 @@ class BootReceiver : BroadcastReceiver() {
         val shouldStart = when (intent?.action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
-            -> PreferencesStore(context).load().let { it.masterEnabled && it.resumeAfterReboot }
+            -> PreferencesStore(context).load().let {
+                (it.masterEnabled && it.resumeAfterReboot) || it.liveNotificationEnabled
+            }
             else -> false
         }
         val battery = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))

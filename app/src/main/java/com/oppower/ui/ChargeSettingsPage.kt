@@ -340,7 +340,7 @@ internal fun ChargeSettingsPage(
             Column(Modifier.padding(11.dp)) {
                 Text("自动调节说明", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 Text("• 温度升高时自动降低充电功率。", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
-                Text("• 温度跨过 0.5°C 分段并持续 15 秒才降档；回落并持续 30 秒才升档。", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+                Text("• 温度跨过 0.5°C 分段并持续 5 秒才降档；回落并持续 8 秒才升档。", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
                 Text("• 温和策略只随温度调整，电量达到上限后暂停。", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
             }
         }

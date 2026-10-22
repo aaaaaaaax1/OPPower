@@ -16,6 +16,10 @@ import com.oppower.ui.MainViewModel
 import com.oppower.ui.OPPowerApp
 import com.oppower.ui.OPPowerTheme
 import rikka.shizuku.Shizuku
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -30,7 +34,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         Shizuku.addRequestPermissionResultListener(permissionListener)
-        ChargeControlService.resumeNotification(this)
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
             LaunchedEffect(state.settings.hideFromRecents) {
@@ -47,6 +50,9 @@ class MainActivity : ComponentActivity() {
                     onClearHistory = viewModel::clearHistory,
                 )
             }
+        }
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            ChargeControlService.start(this@MainActivity)
         }
     }
 
@@ -67,4 +73,5 @@ class MainActivity : ComponentActivity() {
         getSystemService(ActivityManager::class.java).appTasks.firstOrNull()
             ?.setExcludeFromRecents(excluded)
     }
+
 }

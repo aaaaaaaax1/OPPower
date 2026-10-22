@@ -47,38 +47,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val store = PreferencesStore(application)
     private val shizuku = ShizukuGateway(application)
     private val historyStore = ChartHistoryStore(application)
+    private var historySignature = ""
     private val mutable = MutableStateFlow(
         UiState(
             settings = store.load(),
-            points = historyStore.load(),
             showIntro = !store.introSeen(),
-            shizukuInstalled = shizuku.isInstalled,
-            shizukuAvailable = shizuku.isAvailable,
-            shizukuPermission = shizuku.hasPermission,
         ),
     )
     val state: StateFlow<UiState> = mutable.asStateFlow()
 
     init {
         viewModelScope.launch {
-            ChartHistoryBus.points.collectLatest { points ->
-                mutable.value = mutable.value.copy(points = points)
+            // File decoding and record grouping stay off the UI thread.
+            val initial = withContext(Dispatchers.IO) {
+                val points = historyStore.load()
+                val records = deriveRecords(points)
+                Triple(
+                    points,
+                    records,
+                    Triple(shizuku.isInstalled, shizuku.isAvailable, shizuku.hasPermission),
+                )
             }
+            mutable.value = mutable.value.copy(
+                points = initial.first,
+                chargeRecords = initial.second.first.takeLast(50),
+                dischargeRecords = initial.second.second.takeLast(50),
+                shizukuInstalled = initial.third.first,
+                shizukuAvailable = initial.third.second,
+                shizukuPermission = initial.third.third,
+            )
+            historySignature = initial.first.lastOrNull()?.let { "${initial.first.size}:${it.epochMillis}" }.orEmpty()
+            // Publish the loaded history once. The service and view model share
+            // this bus, so without this handoff the persisted points stay hidden
+            // until the next new sample is recorded.
         }
         viewModelScope.launch {
-            while (true) {
-                val battery = reader.snapshot(mutable.value.settings)
-                val points = mutable.value.points.ifEmpty { historyStore.load() }
-                val records = deriveRecords(points)
+            ChartHistoryBus.points.collectLatest { points ->
+                val signature = points.lastOrNull()?.let { "${points.size}:${it.epochMillis}" }.orEmpty()
+                if (signature == historySignature) return@collectLatest
+                historySignature = signature
+                val records = withContext(Dispatchers.Default) {
+                    deriveRecords(points, latestOnly = true)
+                }
                 mutable.value = mutable.value.copy(
-                    battery = battery,
-                    controllerStatus = ChargeControlBus.status.value,
                     points = points,
                     chargeRecords = records.first.takeLast(50),
                     dischargeRecords = records.second.takeLast(50),
-                    shizukuInstalled = shizuku.isInstalled,
-                    shizukuAvailable = shizuku.isAvailable,
-                    shizukuPermission = shizuku.hasPermission,
+                )
+            }
+        }
+        viewModelScope.launch {
+            delay(50)
+            while (true) {
+                val battery = withContext(Dispatchers.IO) { reader.snapshot(mutable.value.settings) }
+                mutable.value = mutable.value.copy(
+                    battery = battery,
+                    controllerStatus = ChargeControlBus.status.value,
                 )
                 delay(2_000)
             }
@@ -145,11 +169,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshShizukuState() {
-        mutable.value = mutable.value.copy(
-            shizukuInstalled = shizuku.isInstalled,
-            shizukuAvailable = shizuku.isAvailable,
-            shizukuPermission = shizuku.hasPermission,
-        )
+        viewModelScope.launch {
+            val state = withContext(Dispatchers.IO) {
+                Triple(shizuku.isInstalled, shizuku.isAvailable, shizuku.hasPermission)
+            }
+            mutable.value = mutable.value.copy(
+                shizukuInstalled = state.first,
+                shizukuAvailable = state.second,
+                shizukuPermission = state.third,
+            )
+        }
     }
 
     fun restoreAll() {
@@ -217,7 +246,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun deriveRecords(points: List<ChartPoint>): Pair<List<ChargeRecord>, List<ChargeRecord>> {
+    private fun deriveRecords(
+        points: List<ChartPoint>,
+        latestOnly: Boolean = false,
+    ): Pair<List<ChargeRecord>, List<ChargeRecord>> {
         val groups = mutableListOf<List<ChartPoint>>()
         var current = mutableListOf<ChartPoint>()
         points.sortedBy { it.epochMillis }.forEach { point ->
@@ -229,7 +261,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (current.isNotEmpty()) groups += current
-        val records = groups.filter { it.size >= 2 }.map(::toRecord)
+        val relevantGroups = if (latestOnly) groups.takeLast(2) else groups
+        val records = relevantGroups.filter { it.size >= 2 }.map(::toRecord)
         return records.partition { record ->
             record.points.firstOrNull()?.acOnline == true
         }

@@ -1,11 +1,6 @@
 package com.oppower.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -57,12 +52,10 @@ fun OPPowerApp(
         }
     }
 
-    AnimatedContent(
-        targetState = page,
-        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
-        label = "oppower-page",
-    ) { visiblePage ->
-        when (visiblePage) {
+    // A direct switch avoids rendering two full pages during transitions. On
+    // long, scrollable pages the crossfade created duplicate layout and drawing
+    // work, which appeared as a visible hitch on the device.
+    when (page) {
         Page.MAIN -> MainPage(
             state = state,
             onOpenChargeSettings = { page = Page.CHARGE_SETTINGS },
@@ -100,7 +93,6 @@ fun OPPowerApp(
             onClearHistory = onClearHistory,
             onRequestShizuku = onRequestShizuku,
         )
-        }
     }
 
     if (state.showIntro) {

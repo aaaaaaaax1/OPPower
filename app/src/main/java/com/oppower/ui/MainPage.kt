@@ -47,7 +47,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.oppower.model.ChartPoint
@@ -61,6 +64,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 @Composable
 internal fun MainPage(
@@ -314,7 +318,7 @@ private fun PowerHero(state: UiState) {
                 Text(state.controllerStatus.phase.label, color = TextSecondary, fontSize = 10.sp)
             }
             Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 7.dp)) {
-                Text(battery.powerW.oneDecimal(), color = TextPrimary, fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                Text(battery.powerW.oneDecimal(), color = TextPrimary, fontSize = 42.sp, fontWeight = FontWeight.Black)
                 Text(" W", color = TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(bottom = 7.dp))
             }
             Text("实时电池功率", color = TextSecondary, fontSize = 10.sp)
@@ -741,12 +745,21 @@ private fun RealtimeCharts(points: List<ChartPoint>) {
     val powerWindowStart = firstMillis + availableRange * powerEndFraction.coerceIn(0f, 1f)
     val powerVisiblePoints = points.filter { it.epochMillis in powerWindowStart.toLong()..(powerWindowStart + windowMillis).toLong() }
     val peakPower = powerVisiblePoints.maxOfOrNull { it.powerW } ?: 5f
-    val powerMax = (Math.ceil(peakPower / 10.0).toFloat() * 10f).coerceAtLeast(10f)
+    // Power uses fixed 5 W ticks and always reserves the next tick above the
+    // observed peak, so a 35 W spike renders against a readable 45 W ceiling.
+    val powerMax = ((kotlin.math.floor(peakPower / 5f) + 2f) * 5f).coerceAtLeast(10f)
     val temperatureWindowStart = firstMillis + availableRange * temperatureEndFraction.coerceIn(0f, 1f)
     val temperatureVisiblePoints = points.filter { it.epochMillis in temperatureWindowStart.toLong()..(temperatureWindowStart + windowMillis).toLong() }
     val temps = temperatureVisiblePoints.map { it.temperatureC }
-    val tempMin = (temps.minOrNull() ?: 30f).coerceAtMost(40f)
-    val tempMax = max(tempMin + 1f, temps.maxOrNull() ?: 42f)
+    val observedMinTemp = temps.minOrNull() ?: 30f
+    val observedMaxTemp = temps.maxOrNull() ?: 42f
+    // Temperature uses 1°C ticks. The practical display starts at 34°C and
+    // reserves the next whole degree above the observed peak.
+    val tempMin = 34f
+    val tempMax = max(
+        tempMin + 4f,
+        kotlin.math.floor(observedMaxTemp.coerceAtLeast(tempMin + 1f)) + 2f,
+    )
 
     Text("功率曲线", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     ChartCard(
@@ -799,6 +812,9 @@ private fun ChartCard(
     value: (ChartPoint) -> Float,
     onDrag: (Float) -> Unit,
 ) {
+    val textMeasurer = rememberTextMeasurer()
+    val tickStep = if (unit == "W") 5f else 1f
+    val tickCount = (((maximumY - minimumY) / tickStep).roundToInt() + 1).coerceAtLeast(2)
     Surface(
         color = Surface,
         shape = RoundedCornerShape(11.dp),
@@ -812,7 +828,7 @@ private fun ChartCard(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(128.dp)
+                    .height(190.dp)
                     .padding(top = 6.dp)
                     .pointerInput(windowMillis) {
                         detectHorizontalDragGestures { _, dragAmount ->
@@ -820,13 +836,28 @@ private fun ChartCard(
                         }
                     },
             ) {
-                Canvas(Modifier.fillMaxSize().padding(start = 31.dp, end = 32.dp, top = 9.dp, bottom = 16.dp)) {
+                Canvas(Modifier.fillMaxSize().padding(start = 35.dp, end = 12.dp, top = 10.dp, bottom = 14.dp)) {
                     val right = size.width
                     val bottom = size.height
                     val span = (maximumY - minimumY).coerceAtLeast(1f)
-                    repeat(5) { index ->
-                        val y = bottom * index / 4f
+                    repeat(tickCount) { index ->
+                        val y = bottom * index / (tickCount - 1).toFloat()
                         drawLine(Outline, Offset(0f, y), Offset(right, y), 1f)
+                    }
+                    repeat(tickCount) { index ->
+                        val fraction = 1f - index / (tickCount - 1).toFloat()
+                        val value = minimumY + span * fraction
+                        val label = when (unit) {
+                            "W" -> value.roundToInt().toString()
+                            else -> String.format(Locale.getDefault(), "%.1f", value)
+                        }
+                        val measured = textMeasurer.measure(
+                            text = label,
+                            style = TextStyle(color = TextSecondary, fontSize = 7.sp),
+                        )
+                        val y = (bottom * index / (tickCount - 1).toFloat() - measured.size.height / 2f)
+                            .coerceIn(0f, (bottom - measured.size.height).coerceAtLeast(0f))
+                        drawText(measured, topLeft = Offset(-measured.size.width - 5f, y))
                     }
                     if (points.size >= 2) {
                         val path = Path()
@@ -835,11 +866,9 @@ private fun ChartCard(
                             val y = bottom - bottom * ((value(point) - minimumY) / span).coerceIn(0f, 1f)
                             if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                         }
-                        drawPath(path, color, style = Stroke(2f))
+                        drawPath(path, color, style = Stroke(3f))
                     }
                 }
-                Text("${maximumY.oneDecimal()} $unit", color = color, fontSize = 7.sp, modifier = Modifier.align(Alignment.TopStart))
-                Text("${minimumY.oneDecimal()} $unit", color = TextSecondary, fontSize = 7.sp, modifier = Modifier.align(Alignment.BottomStart))
                 if (points.size < 2) {
                     Text("等待采样…", color = TextSecondary, fontSize = 9.sp, modifier = Modifier.align(Alignment.Center))
                 }
