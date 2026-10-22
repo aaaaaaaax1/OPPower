@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
         foregroundServiceRequested = true
         ChargeControlService.startWhenAvailable(
             this,
+            action = ChargeControlService.ACTION_RESUME_NOTIFICATION,
             onFinished = { foregroundServiceRequested = false },
         )
     }

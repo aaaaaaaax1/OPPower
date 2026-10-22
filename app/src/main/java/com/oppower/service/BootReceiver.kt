@@ -19,7 +19,7 @@ class BootReceiver : BroadcastReceiver() {
         val battery = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
         if (shouldStart && plugged) {
-            ChargeControlService.start(context)
+            ChargeControlService.start(context, ChargeControlService.ACTION_POWER_CONNECTED)
         }
     }
 }

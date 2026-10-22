@@ -175,11 +175,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val updated = transform(oldSettings).sanitized()
         store.save(updated)
         mutable.value = mutable.value.copy(settings = updated)
-        val mustStartService =
-            (!oldSettings.masterEnabled && updated.masterEnabled) ||
-                (!oldSettings.liveNotificationEnabled && updated.liveNotificationEnabled)
-        if (mustStartService) {
-            ChargeControlService.startWhenAvailable(getApplication())
+        val controlChanged =
+            oldSettings.masterEnabled != updated.masterEnabled ||
+                oldSettings.baseTier != updated.baseTier ||
+                oldSettings.customRulesEnabled != updated.customRulesEnabled ||
+                oldSettings.customRules != updated.customRules ||
+                oldSettings.temperatureDownshiftSeconds != updated.temperatureDownshiftSeconds ||
+                oldSettings.temperatureUpshiftSeconds != updated.temperatureUpshiftSeconds ||
+                oldSettings.socDownshiftSeconds != updated.socDownshiftSeconds ||
+                oldSettings.socUpshiftSeconds != updated.socUpshiftSeconds
+        val serviceAvailabilityChanged =
+            oldSettings.liveNotificationEnabled != updated.liveNotificationEnabled
+        if (controlChanged || serviceAvailabilityChanged) {
+            ChargeControlService.controlSettingsChanged(getApplication())
         }
         if (updated.historyEnabled != oldSettings.historyEnabled) {
             ChargeControlService.historySettingsChanged(getApplication())

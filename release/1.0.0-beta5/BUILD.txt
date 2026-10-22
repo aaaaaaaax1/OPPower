@@ -1,0 +1,14 @@
+OPPower 1.0.0-beta5
+versionCode=5
+built=2026-10-23 00:07:39 +08:00
+apk=OPPower-1.0.0-beta5-debug.apk
+sha256=DC55D92AC835A302FBAB98D0FEBCBDC2C027C5F8FFC3D6C68DA2861D865A156F
+
+Changes:
+- Restored the LLPower-style Android 16 live activity notification by using setOngoing(true) on the live path.
+- Real-device offset restored flags ONGOING_EVENT|PROMOTED_ONGOING with Notification.ProgressStyle.
+- The notification has no visible app icon or expand chevron; the tracker is white when charging control is off and amber when enabled.
+- Control settings, power connection, and notification resume actions now trigger an immediate controller pass.
+- Direct target-gear closed-loop control continues without debounce or a mandatory cosa=0 transition.
+- Page data refreshes every second; curve sampling remains LLPower-compatible at 3/5/180 seconds.
+- Unit tests: 21, failures: 0, errors: 0; lint: 0 errors; debug assembly passed.

@@ -12,7 +12,10 @@ class PowerConnectionReceiver : BroadcastReceiver() {
         // exposes the new AC state. Keep the broadcast alive while retrying so
         // the foreground notification starts without toggling any app setting.
         val pendingResult = goAsync()
-        ChargeControlService.startWhenAvailable(context.applicationContext) {
+        ChargeControlService.startWhenAvailable(
+            context.applicationContext,
+            action = ChargeControlService.ACTION_POWER_CONNECTED,
+        ) {
             pendingResult.finish()
         }
     }

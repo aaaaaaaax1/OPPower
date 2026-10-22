@@ -13,3 +13,11 @@ captures/
 keystore.properties
 signing/
 *.apk
+
+# Local reverse-engineering and screenshot artifacts
+/output/
+/current-screen.png
+/screen*.png
+/nul
+*.log
+*.trace

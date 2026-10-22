@@ -59,6 +59,41 @@ class ChargingControllerTest {
         assertEquals(listOf(-9), gateway.writes)
     }
 
+    @Test
+    fun disablingMasterSwitchImmediatelyRestoresCosaZero() {
+        val gateway = FakeChargingGateway(cosa = -9, gear = 0)
+        val controller = ChargingController(gateway)
+        controller.evaluate(settings(BaseTier.MAX_OUTPUT), battery())
+        gateway.writes.clear()
+
+        val status = controller.evaluate(
+            settings(BaseTier.MAX_OUTPUT).copy(masterEnabled = false),
+            battery(),
+        )
+
+        assertEquals(ControllerPhase.DISABLED, status.phase)
+        assertEquals(0, gateway.cosa)
+        assertEquals(listOf(0), gateway.writes)
+    }
+
+    @Test
+    fun reenablingAfterOffRestoresTargetWithoutIntermediaryZero() {
+        val gateway = FakeChargingGateway(cosa = -9, gear = 0)
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled.copy(masterEnabled = false), battery())
+        gateway.gear = 8
+        gateway.writes.clear()
+
+        val status = controller.evaluate(enabled, battery())
+
+        assertEquals(ControllerPhase.ACTIVE, status.phase)
+        assertEquals(0, status.desiredGear)
+        assertEquals(listOf(-8), gateway.writes)
+        assertFalse(gateway.writes.contains(0))
+    }
+
     private fun settings(baseTier: BaseTier) = RuntimeSettings(
         masterEnabled = true,
         baseTier = baseTier,

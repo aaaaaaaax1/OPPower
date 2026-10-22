@@ -111,11 +111,11 @@ class ChargeControlService : Service() {
                     val cycleStartedAt = SystemClock.elapsedRealtime()
                     val settings = cachedSettings
                     val battery = batteryReader.snapshot(settings)
-                    val status = if (settings.masterEnabled) {
-                        controller.evaluate(settings, battery)
-                    } else {
-                        ControllerStatus(ControllerPhase.DISABLED, "亮屏快充未启用")
-                    }
+                    // evaluate() also performs the safe cosa=0 restoration when
+                    // the master switch is off. Keeping that path in the normal
+                    // cycle prevents a disabled switch from leaving an old
+                    // offset active after a settings change.
+                    val status = controller.evaluate(settings, battery)
                     ChargeControlBus.status.value = status
                     if (lastOverlayEnabled != settings.overlayKeepAliveEnabled) {
                         lastOverlayEnabled = settings.overlayKeepAliveEnabled
@@ -150,6 +150,11 @@ class ChargeControlService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
+        // Preferences are applied synchronously to the in-process instance, but
+        // the service may have been created before the toggle was saved. Reload
+        // on every command so the immediate pass always sees the new target.
+        cachedSettings = prefs.load()
         val settings = cachedSettings
         val enabled = settings.masterEnabled || settings.liveNotificationEnabled
         if (enabled) {
@@ -164,22 +169,11 @@ class ChargeControlService : Service() {
             }
             startControlLoop()
         }
-        if (intent?.action == ACTION_RESUME_NOTIFICATION) {
+        if (action == ACTION_RESUME_NOTIFICATION) {
             if (!enabled) return START_NOT_STICKY
             notificationDismissed = false
-            scope.launch {
-                val battery = batteryReader.snapshot(cachedSettings)
-                if (!battery.acOnline) return@launch
-                val status = if (cachedSettings.masterEnabled) {
-                    controller.evaluate(cachedSettings, battery)
-                } else {
-                    ControllerStatus(ControllerPhase.DISABLED, "亮屏快充未启用")
-                }
-                syncStatusNotification(status, battery, cachedSettings, force = true)
-            }
-            return START_STICKY
         }
-        if (intent?.action == ACTION_RESTORE_ALL) {
+        if (action == ACTION_RESTORE_ALL) {
             scope.launch {
                 val status = controller.restoreAll()
                 ChargeControlBus.status.value = status
@@ -193,7 +187,7 @@ class ChargeControlService : Service() {
                 )
             }
         }
-        if (intent?.action == ACTION_HISTORY_SETTING_CHANGED) {
+        if (action == ACTION_HISTORY_SETTING_CHANGED) {
             scope.launch {
                 if (!cachedSettings.historyEnabled) {
                     historyStore.clear()
@@ -201,7 +195,22 @@ class ChargeControlService : Service() {
                 }
             }
         }
-        return START_STICKY
+        if (action in IMMEDIATE_CONTROL_ACTIONS) {
+            ChargeControlBus.requestUpdate()
+            scope.launch {
+                val battery = batteryReader.snapshot(settings)
+                val status = controller.evaluate(settings, battery)
+                ChargeControlBus.status.value = status
+                syncStatusNotification(status, battery, settings, force = true)
+                android.util.Log.i(
+                    "OPPower",
+                    "Immediate control action=$action phase=${status.phase} " +
+                        "targetGear=${status.desiredGear} cosa=${status.appliedCosa}",
+                )
+                if (!enabled) stopSelf()
+            }
+        }
+        return if (enabled) START_STICKY else START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -339,7 +348,7 @@ class ChargeControlService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val level = battery.levelPercent.coerceIn(0, 100)
-        val body = listOf(data, tier).filter { it.isNotBlank() }.joinToString("\n")
+        val body = listOf(data, tier).filter { it.isNotBlank() }.joinToString("  ·  ")
         val usesLiveStyle = Build.VERSION.SDK_INT >= 36
         val builder = Notification.Builder(this, if (usesLiveStyle) LIVE_CHANNEL_ID else CHANNEL_ID)
             // Android requires a small icon. ColorOS can replace ordinary
@@ -352,7 +361,7 @@ class ChargeControlService : Service() {
             .setVisibility(
                 if (usesLiveStyle) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PUBLIC,
             )
-            .setOngoing(false)
+            .setOngoing(usesLiveStyle)
             .setOnlyAlertOnce(true)
             .setShowWhen(usesLiveStyle)
             .setWhen(if (usesLiveStyle) System.currentTimeMillis() else 0L)
@@ -444,9 +453,16 @@ class ChargeControlService : Service() {
         const val ACTION_RESTORE_ALL = "com.oppower.action.RESTORE_ALL"
         const val ACTION_HISTORY_SETTING_CHANGED = "com.oppower.action.HISTORY_SETTING_CHANGED"
         const val ACTION_RESUME_NOTIFICATION = "com.oppower.action.RESUME_NOTIFICATION"
+        const val ACTION_CONTROL_SETTINGS_CHANGED = "com.oppower.action.CONTROL_SETTINGS_CHANGED"
+        const val ACTION_POWER_CONNECTED = "com.oppower.action.POWER_CONNECTED"
         private val BATTERY_GREEN = android.graphics.Color.rgb(76, 175, 80)
         private val AMBER = android.graphics.Color.rgb(255, 193, 7)
         private const val CONTROL_CYCLE_MILLIS = 1_000L
+        private val IMMEDIATE_CONTROL_ACTIONS = setOf(
+            ACTION_RESUME_NOTIFICATION,
+            ACTION_CONTROL_SETTINGS_CHANGED,
+            ACTION_POWER_CONNECTED,
+        )
 
         @Volatile
         private var notificationDismissed = false
@@ -455,7 +471,10 @@ class ChargeControlService : Service() {
             notificationDismissed = true
         }
 
-        fun start(context: Context): Boolean {
+        fun start(
+            context: Context,
+            action: String = ACTION_CONTROL_SETTINGS_CHANGED,
+        ): Boolean {
             val settings = PreferencesStore(context).load()
             if (!settings.masterEnabled && !settings.liveNotificationEnabled) return false
             val batteryIntent = context.registerReceiver(
@@ -465,7 +484,7 @@ class ChargeControlService : Service() {
             val plugged = (batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
             if (!plugged) return false
             val intent = Intent(context, ChargeControlService::class.java)
-                .setAction(ACTION_RESUME_NOTIFICATION)
+                .setAction(action)
             return runCatching {
                 context.startForegroundService(intent)
                 true
@@ -479,6 +498,7 @@ class ChargeControlService : Service() {
             context: Context,
             attempts: Int = 6,
             retryDelayMillis: Long = 300L,
+            action: String = ACTION_CONTROL_SETTINGS_CHANGED,
             onFinished: (() -> Unit)? = null,
         ) {
             require(attempts > 0)
@@ -490,7 +510,7 @@ class ChargeControlService : Service() {
                     completedAttempts += 1
                     val settings = PreferencesStore(appContext).load()
                     val enabled = settings.masterEnabled || settings.liveNotificationEnabled
-                    if (start(appContext) || !enabled || completedAttempts >= attempts) {
+                    if (start(appContext, action) || !enabled || completedAttempts >= attempts) {
                         onFinished?.invoke()
                         return
                     }
@@ -511,8 +531,22 @@ class ChargeControlService : Service() {
             runCatching { context.startService(intent) }
         }
 
+        fun controlSettingsChanged(context: Context) {
+            val appContext = context.applicationContext
+            val settings = PreferencesStore(appContext).load()
+            if (settings.masterEnabled || settings.liveNotificationEnabled) {
+                startWhenAvailable(appContext, action = ACTION_CONTROL_SETTINGS_CHANGED)
+                return
+            }
+            // This transition may be turning the last enabled feature off. The
+            // existing service still needs one command so it can restore cosa=0.
+            val intent = Intent(appContext, ChargeControlService::class.java)
+                .setAction(ACTION_CONTROL_SETTINGS_CHANGED)
+            runCatching { appContext.startService(intent) }
+        }
+
         fun resumeNotification(context: Context) {
-            start(context)
+            start(context, ACTION_RESUME_NOTIFICATION)
         }
     }
 }
