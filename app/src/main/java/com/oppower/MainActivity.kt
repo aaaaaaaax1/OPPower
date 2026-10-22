@@ -11,20 +11,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oppower.service.ChargeControlService
 import com.oppower.ui.MainViewModel
 import com.oppower.ui.OPPowerApp
 import com.oppower.ui.OPPowerTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import rikka.shizuku.Shizuku
 
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var foregroundServiceRequested = false
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
         ensureServiceStarted()
-        if (granted) ChargeControlService.resumeNotification(this)
     }
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode == 1001 && grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -36,11 +38,20 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Shizuku.addRequestPermissionResultListener(permissionListener)
         setContent {
-            val state by viewModel.state.collectAsStateWithLifecycle()
-            LaunchedEffect(state.settings.hideFromRecents) {
-                setTaskExclusion(state.settings.hideFromRecents)
+            val state = viewModel.state.collectAsStateWithLifecycle()
+            val settingsFlow = remember(viewModel) {
+                viewModel.state.map { it.settings }.distinctUntilChanged()
             }
-            OPPowerTheme(state.settings) {
+            val settings by settingsFlow.collectAsStateWithLifecycle(
+                initialValue = state.value.settings,
+            )
+            LaunchedEffect(viewModel) {
+                viewModel.state
+                    .map { it.settings.hideFromRecents }
+                    .distinctUntilChanged()
+                    .collect(::setTaskExclusion)
+            }
+            OPPowerTheme(settings) {
                 OPPowerApp(
                     state = state,
                     onSettingsChange = viewModel::updateSettings,
@@ -70,13 +81,6 @@ class MainActivity : ComponentActivity() {
         viewModel.setPageVisible(true)
         viewModel.refreshShizukuState()
         ensureServiceStarted()
-        ChargeControlService.resumeNotification(this)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        viewModel.refreshShizukuState()
-        ChargeControlService.resumeNotification(this)
     }
 
     override fun onStop() {

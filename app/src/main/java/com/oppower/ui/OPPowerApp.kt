@@ -9,8 +9,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -28,7 +31,7 @@ private enum class Page {
 
 @Composable
 fun OPPowerApp(
-    state: UiState,
+    state: State<UiState>,
     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
     onRequestShizuku: () -> Unit,
     onReadGear: () -> Unit,
@@ -69,7 +72,7 @@ fun OPPowerApp(
         )
 
         Page.CHARGE_SETTINGS -> ChargeSettingsPage(
-            state = state,
+            state = state.value,
             onBack = { page = Page.MAIN },
             onSettingsChange = onSettingsChange,
             onRestore = onRestore,
@@ -79,7 +82,7 @@ fun OPPowerApp(
 
         Page.SETTINGS -> SettingsRouter(
             screen = settingsScreen,
-            state = state,
+            state = state.value,
             onNavigate = { settingsScreen = it },
             onBack = {
                 if (settingsScreen == SettingsScreen.HOME) {
@@ -95,11 +98,22 @@ fun OPPowerApp(
         )
     }
 
-    if (state.showIntro) {
-        FirstRunDialog(
-            onDismiss = onDismissIntro,
-            onJoinQq = { joinQqGroup(context) },
-        )
+    FirstRunHost(
+        state = state,
+        onDismiss = onDismissIntro,
+        onJoinQq = { joinQqGroup(context) },
+    )
+}
+
+@Composable
+private fun FirstRunHost(
+    state: State<UiState>,
+    onDismiss: () -> Unit,
+    onJoinQq: () -> Unit,
+) {
+    val showIntro = remember(state) { derivedStateOf { state.value.showIntro } }
+    if (showIntro.value) {
+        FirstRunDialog(onDismiss = onDismiss, onJoinQq = onJoinQq)
     }
 }
 

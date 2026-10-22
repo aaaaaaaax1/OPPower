@@ -1,0 +1,15 @@
+diff --git a/app/src/main/java/com/oppower/MainActivity.kt b/app/src/main/java/com/oppower/MainActivity.kt
+--- a/app/src/main/java/com/oppower/MainActivity.kt
++++ b/app/src/main/java/com/oppower/MainActivity.kt
+@@ -24,7 +24,6 @@ class MainActivity : ComponentActivity() {
+     private var foregroundServiceRequested = false
+     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+         ensureServiceStarted()
+-        if (granted) ChargeControlService.resumeNotification(this)
+     }
+@@ -74,8 +73,6 @@ class MainActivity : ComponentActivity() {
+     override fun onResume() {
+         super.onResume()
+-        viewModel.refreshShizukuState()
+-        ChargeControlService.resumeNotification(this)
+     }

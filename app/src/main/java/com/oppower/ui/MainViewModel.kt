@@ -66,34 +66,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val initial = withContext(Dispatchers.IO) {
                 val points = historyStore.load()
-                val records = deriveRecords(points)
-                Triple(
-                    points,
-                    records,
-                    Triple(shizuku.isInstalled, shizuku.isAvailable, shizuku.hasPermission),
-                )
+                points to Triple(shizuku.isInstalled, shizuku.isAvailable, shizuku.hasPermission)
             }
             val points = initial.first
-            val chargeRecords = initial.second.first.takeLast(50)
-            val dischargeRecords = initial.second.second.takeLast(50)
             currentSessionOnline = points.lastOrNull()?.acOnline
-            currentSessionRecord = seedSessionRecord(
-                points.lastOrNull(),
-                if (points.lastOrNull()?.acOnline == true) chargeRecords else dischargeRecords,
-            )
             mutable.value = mutable.value.copy(
                 points = points,
-                chargeRecords = chargeRecords,
-                dischargeRecords = dischargeRecords,
-                shizukuInstalled = initial.third.first,
-                shizukuAvailable = initial.third.second,
-                shizukuPermission = initial.third.third,
+                shizukuInstalled = initial.second.first,
+                shizukuAvailable = initial.second.second,
+                shizukuPermission = initial.second.third,
             )
             historySignature = signature(points)
             historyLoaded = true
             // Publish the persisted history once. The control service may already
             // hold newer samples, so mergeLoaded preserves both sides.
             ChartHistoryBus.mergeLoaded(points)
+
+            // Session statistics are useful below the fold. Publish the persisted
+            // samples first so the main page and controls can become responsive
+            // without waiting for a full 24 hour record derivation.
+            val records = withContext(Dispatchers.Default) { deriveRecords(points) }
+            if (mutable.value.points === points) {
+                currentSessionRecord = seedSessionRecord(
+                    points.lastOrNull(),
+                    if (points.lastOrNull()?.acOnline == true) records.first else records.second,
+                )
+                mutable.value = mutable.value.copy(
+                    chargeRecords = records.first.takeLast(50),
+                    dischargeRecords = records.second.takeLast(50),
+                )
+            }
         }
 
         viewModelScope.launch {

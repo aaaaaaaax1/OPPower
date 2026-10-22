@@ -1,0 +1,13 @@
+OPPower 1.0.0-beta4
+versionCode=4
+built=2026-10-22 21:30:29 +08:00
+apk=OPPower-1.0.0-beta4-debug.apk
+sha256=43AD083730408C8C1FC1189C88DF7862FC1CE3C1F9B18EF52B8B9D4C0A1EE093
+
+Changes:
+- Direct target-gear closed-loop control without debounce or a mandatory cosa=0 transition.
+- Power connection and enable/level changes start or refresh control automatically with a 1 s cycle.
+- Live software metrics refresh every second; chart sampling remains LLPower-compatible at 3/5/180 s.
+- Startup work is off the main thread and scrolling/list rendering is optimized without removing features.
+- Fixed Compose theme initialization reading a StateFlow outside lifecycle state collection.
+- Lint, unit tests, and debug assembly passed (19 tests, 0 failures; 0 lint errors).

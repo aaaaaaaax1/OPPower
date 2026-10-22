@@ -34,8 +34,8 @@ nextCosa = clamp(currentCosa + targetGear - currentGear, -9, 9)
 
 - 实际 gear 等于目标时只读，不重复写设置。
 - 实际 gear 不等于目标时，在现有 `cosa` 上直接覆盖新值并回读确认，不先写 `0`。
-- 用户开启总开关、首次选择基础档、切换基础档或修改自定义规则均无防抖，下一次 250 ms 控制周期直接进入新目标。
-- 写入后即使系统短时保留旧 gear，下一次 250 ms 周期仍立即按这份最新回读结果重新判断；不存在回读保护窗口或防抖等待。
+- 用户开启总开关、首次选择基础档、切换基础档或修改自定义规则均无防抖，下一次 1 秒控制周期直接进入新目标。
+- 写入后即使系统短时保留旧 gear，下一次 1 秒周期仍立即按这份最新回读结果重新判断；不存在回读保护窗口或防抖等待。
 - 同一目标下实际 gear 因前台应用或系统状态漂移时，闭环按实时 `cosa` 重新计算并修正。
 - 温度下降 5 秒、恢复 8 秒的确认仍属于热安全规则；用户选择、档位切换和实际 gear 闭环没有防抖。
 - 只有拔电、关闭总开关、电量暂停、充满或停止服务才恢复 `cosa=0`。软件不读取或写入 `single_speed_charge_state`。
@@ -47,11 +47,12 @@ nextCosa = clamp(currentCosa + targetGear - currentGear, -9, 9)
 - `:app:compileDebugKotlin` 通过。
 - `:app:testDebugUnitTest` 通过，共 19 项、0 失败。覆盖默认温度档、SOC 暂停、100%/FULL、禁止更高温反向升档、均衡档内部 gear、Shizuku 命令白名单、24 小时曲线记录序列化、LLPower 采样间隔、曲线聚合/平滑/断线/坐标轴，以及“基础档变化首轮直写、不经过 0”“旧 gear 回读下连续周期立即纠偏”和“同目标漂移立即纠偏”的控制器用例。
 - `:app:assembleDebug` 通过并生成 debug key 签名 APK。
-- 页面数据每秒刷新；曲线按 LLPower 节奏采样：充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒。控制服务在 AC 在线时每 250 ms 执行一次控制循环。
+- 页面数据每秒刷新；曲线按 LLPower 节奏采样：充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒。控制服务在 AC 在线时每 1 秒执行一次控制循环。
 - 设置多级页面、主题与比例、通知内容/频率、硬件修正、诊断字段、数据管理、悬浮窗与无障碍保活已接入源码。
 - 设置主页、亮屏快充详情页和系统页提供 Shizuku 未安装、未运行、未授权、已授权四种状态及对应操作。
 - 通知只在接电时显示；总开关关闭时显示“亮屏快充未启用”。Android 16 真机已确认使用 LLPower 同类的 `Notification.ProgressStyle`、`battery_live_update_v2` 通道和 `PROMOTED_ONGOING` 实时卡片；开启 ColorOS“流体云显示实时活动”后，顶部卡片使用系统透明样式，正文保留电量、电压、电流、温度和亮屏快充档位。
 - `1.0.0-beta3` 使用 debug key 签名（versionCode 3），已通过上述单测和 `:app:assembleDebug`。APK 位于 `release/1.0.0-beta3/`，SHA-256 为 `DA8DA0D74546FA1E686BE61573542588EC39A2B1AAE2C1AC986A505613C11F35`；beta2 及其归档保持原样。各版本使用独立目录。
+- `1.0.0-beta4` 使用 debug key 签名（versionCode `4`），已通过 `:app:lintDebug`（0 error）、上述单测和 `:app:assembleDebug`。APK 位于 `release/1.0.0-beta4/`，SHA-256 为 `43AD083730408C8C1FC1189C88DF7862FC1CE3C1F9B18EF52B8B9D4C0A1EE093`；beta1–beta3 保持原样。各版本使用独立目录。
 - 真机已安装验证冷启动、前台服务、通知和 Shizuku 授权路径。修复了 `ForegroundServiceDidNotStartInTimeException`；前台服务启动后持续运行，无新的 ANR 或崩溃记录。
 
 ## 后续真机验收
