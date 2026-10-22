@@ -2,7 +2,7 @@
 
 OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制器。它通过 Shizuku 执行受限的 `settings` 命令，维持 `cosa_ctc_value` 热控偏移，并提供功率、温度、电量监测和本地充放电趋势。
 
-> 当前版本为 `1.0.0-beta1`。仓库包含设计书、可编译源码和本地生成的测试 APK；APK 构建产物不提交到 Git。
+> 当前版本为 `1.0.0-beta3`。仓库包含设计书、可编译源码和本地生成的测试 APK；APK 构建产物不提交到 Git。
 
 ## 功能
 
@@ -10,7 +10,8 @@ OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制�
 - 默认温度与电量保护规则，可切换为两条自定义温度条件和两条自定义电量条件。
 - 插电自动校准、拔电恢复、达到 80% 电量暂停快充增强、充满后恢复系统默认。
 - 前台服务保持控制；划掉界面后仍可执行控制，关闭总开关、充满或停止服务时恢复系统默认。
-- 电流、电压、温度、电量，以及保留 24 小时、可左右拖动的真实时间功率/温度曲线。
+- 电流、电压、温度、电量，以及按 LLPower 节奏采样、保留 24 小时原始记录、可左右拖动的真实时间功率/温度曲线。
+- 页面指标每秒刷新；曲线在充电亮屏时每 3 秒、充电熄屏时每 5 秒、未充电时每 180 秒采样，图表显示最近 8 小时并默认显示 2 小时窗口。
 - 设置包含外观、通知、稳定运行、高级保活、硬件修正、系统与诊断、数据管理、常见问题、关于与许可。
 - 设置主页和系统页提供 Shizuku 状态与授权入口；未安装时打开下载页，未运行时打开 Shizuku，已运行时直接向 OPPower 申请授权。
 - 外观支持主题模式、六种配色、字体和界面比例、卡片不透明度及隐藏最近任务。
@@ -29,7 +30,7 @@ OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制�
 
 ## 构建
 
-项目使用 JDK 17、Android SDK 35 和 Gradle 8.13。请把构建工具安装在仓库之外，不提交 SDK、JDK、Gradle 发行包、`.gradle`、`build` 或 `local.properties`。
+项目使用 JDK 17、Android SDK 36 和 Gradle 8.13。请把构建工具安装在仓库之外，不提交 SDK、JDK、Gradle 发行包、`.gradle`、`build` 或 `local.properties`。
 
 ```powershell
 ./gradlew.bat :app:compileDebugKotlin
@@ -42,7 +43,7 @@ OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制�
 ./gradlew.bat :app:assembleDebug
 ```
 
-构建结果位于 `app/build/outputs/apk/debug/app-debug.apk`。正式发布前应创建独立的 release keystore，并执行 `:app:assembleRelease`。
+构建结果位于 `app/build/outputs/apk/debug/app-debug.apk`。每次可安装版本必须同时归档到 `release/<versionName>/OPPower-<versionName>-debug.apk`，并在版本目录写入 `BUILD.txt`；不同版本使用不同目录，禁止覆盖旧版本。项目根目录保留当前版本 APK 作为快捷入口。正式发布前应创建独立的 release keystore，并执行 `:app:assembleRelease`。
 
 ## 文档
 

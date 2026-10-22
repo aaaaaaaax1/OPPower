@@ -27,6 +27,11 @@ class BatteryReader(private val context: Context) {
         // BATTERY_PROPERTY_CURRENT_NOW is normally reported in microamperes.
         val acOnline = (intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
         val normalizedCurrent = if (kotlin.math.abs(rawCurrent) >= 10_000) rawCurrent / 1_000 else rawCurrent
+        // ColorOS reports current sign inconsistently across charge modes, and
+        // some drivers continue to expose charging current while the screen-on
+        // draw exceeds charger input. Use AC state for the power direction and
+        // retain the measured current magnitude. The explicit inversion option
+        // below remains available for devices with a reversed hardware sign.
         val directionalCurrent = when {
             normalizedCurrent == 0 -> 0
             acOnline -> kotlin.math.abs(normalizedCurrent)

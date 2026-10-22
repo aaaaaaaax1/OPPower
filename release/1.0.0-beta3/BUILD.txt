@@ -1,0 +1,12 @@
+OPPower 1.0.0-beta3
+versionCode=3
+built=2026-10-22 20:40:39 +08:00
+apk=OPPower-1.0.0-beta3-debug.apk
+sha256=DA8DA0D74546FA1E686BE61573542588EC39A2B1AAE2C1AC986A505613C11F35
+
+Changes:
+- Chart samples now follow LLPower cadence: 3 s while charging with screen on, 5 s while charging with screen off, and 180 s while not charging.
+- Power and temperature curves use LLPower-compatible aggregation, robust smoothing, rendering budget, axes, and seven-minute gap splitting while retaining OPPower UI.
+- Live page metrics still refresh every second.
+- Raw chart history is retained for 24 hours; the chart shows 8 hours and defaults to a 2-hour window.
+- Unit tests and debug assembly passed (19 tests, 0 failures).

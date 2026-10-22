@@ -53,6 +53,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.oppower.history.ChartHistoryStore
+import com.oppower.history.CurveAxis
+import com.oppower.history.CurveProcessing
+import com.oppower.history.CurveSegment
 import com.oppower.model.ChartPoint
 import com.oppower.model.ChargeRecord
 import com.oppower.model.ControllerPhase
@@ -63,7 +67,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 @Composable
@@ -187,7 +190,13 @@ internal fun MainPage(
             onOpenDischarge = { recordKind = RecordKind.DISCHARGE },
         )
         SectionHeader("实时曲线", "两张图可独立拖动")
-        RealtimeCharts(state.points)
+        RealtimeCharts(
+            points = state.points,
+            recordIntervalMs = ChartHistoryStore.sampleIntervalMillis(
+                isCharging = state.battery.isCharging,
+                screenOn = true,
+            ),
+        )
         Text(
             "图表用于观察趋势；实际输入功率以外部功率计为准。",
             color = TextSecondary,
@@ -734,44 +743,58 @@ private fun RecordDetailRows(record: ChargeRecord) {
 }
 
 @Composable
-private fun RealtimeCharts(points: List<ChartPoint>) {
+private fun RealtimeCharts(
+    points: List<ChartPoint>,
+    recordIntervalMs: Long,
+) {
     val now = System.currentTimeMillis()
     val windowMillis = 2L * 60L * 60L * 1_000L
+    val historyEnd = points.lastOrNull()?.epochMillis ?: now
+    val historyStart = historyEnd - CurveProcessing.HISTORY_WINDOW_MS
     var powerEndFraction by remember { mutableFloatStateOf(1f) }
     var temperatureEndFraction by remember { mutableFloatStateOf(1f) }
-    val firstMillis = points.firstOrNull()?.epochMillis ?: now
-    val lastMillis = points.lastOrNull()?.epochMillis ?: now
-    val availableRange = (lastMillis - firstMillis - windowMillis).coerceAtLeast(0L)
-    val powerWindowStart = firstMillis + availableRange * powerEndFraction.coerceIn(0f, 1f)
-    val powerVisiblePoints = points.filter { it.epochMillis in powerWindowStart.toLong()..(powerWindowStart + windowMillis).toLong() }
-    val peakPower = powerVisiblePoints.maxOfOrNull { it.powerW } ?: 5f
-    // Power uses fixed 5 W ticks and always reserves the next tick above the
-    // observed peak, so a 35 W spike renders against a readable 45 W ceiling.
-    val powerMax = ((kotlin.math.floor(peakPower / 5f) + 2f) * 5f).coerceAtLeast(10f)
-    val temperatureWindowStart = firstMillis + availableRange * temperatureEndFraction.coerceIn(0f, 1f)
-    val temperatureVisiblePoints = points.filter { it.epochMillis in temperatureWindowStart.toLong()..(temperatureWindowStart + windowMillis).toLong() }
-    val temps = temperatureVisiblePoints.map { it.temperatureC }
-    val observedMinTemp = temps.minOrNull() ?: 30f
-    val observedMaxTemp = temps.maxOrNull() ?: 42f
-    // Temperature uses 1°C ticks. The practical display starts at 34°C and
-    // reserves the next whole degree above the observed peak.
-    val tempMin = 34f
-    val tempMax = max(
-        tempMin + 4f,
-        kotlin.math.floor(observedMaxTemp.coerceAtLeast(tempMin + 1f)) + 2f,
-    )
+
+    // Values, buckets, filters and axis rules follow LLPower. Processing is
+    // keyed by the persisted points so the 1 s page refresh does not repeat it.
+    val powerSnapshot = remember(points, recordIntervalMs, historyStart, historyEnd) {
+        CurveProcessing.processPower(
+            points = points,
+            windowStart = historyStart,
+            windowEnd = historyEnd,
+            recordIntervalMs = recordIntervalMs,
+        )
+    }
+    val temperatureSnapshot = remember(points, historyStart, historyEnd) {
+        CurveProcessing.processTemperature(
+            points = points,
+            windowStart = historyStart,
+            windowEnd = historyEnd,
+        )
+    }
+
+    val timelineEnd = maxOf(now, historyEnd)
+    val availableStart = maxOf(historyStart, timelineEnd - CurveProcessing.HISTORY_WINDOW_MS)
+    val availableRange = (timelineEnd - availableStart - windowMillis).coerceAtLeast(0L)
+    val powerWindowStart = availableStart + (availableRange * powerEndFraction.coerceIn(0f, 1f)).toLong()
+    val temperatureWindowStart = availableStart + (availableRange * temperatureEndFraction.coerceIn(0f, 1f)).toLong()
+    val powerWindowEnd = powerWindowStart + windowMillis
+    val temperatureWindowEnd = temperatureWindowStart + windowMillis
+    val powerSegments = remember(powerSnapshot, powerWindowStart, powerWindowEnd) {
+        CurveProcessing.clip(powerSnapshot, powerWindowStart, powerWindowEnd)
+    }
+    val temperatureSegments = remember(temperatureSnapshot, temperatureWindowStart, temperatureWindowEnd) {
+        CurveProcessing.clip(temperatureSnapshot, temperatureWindowStart, temperatureWindowEnd)
+    }
 
     Text("功率曲线", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     ChartCard(
         title = "实时功率",
         unit = "W",
         color = Cyan,
-        points = powerVisiblePoints,
-        windowStart = powerWindowStart.toLong(),
+        segments = powerSegments,
+        windowStart = powerWindowStart,
         windowMillis = windowMillis,
-        minimumY = 0f,
-        maximumY = powerMax,
-        value = { it.powerW },
+        axis = powerSnapshot.axis,
         onDrag = { dragAmount ->
             powerEndFraction = (powerEndFraction - dragAmount).coerceIn(0f, 1f)
         },
@@ -781,18 +804,16 @@ private fun RealtimeCharts(points: List<ChartPoint>) {
         title = "电池温度",
         unit = "°C",
         color = Amber,
-        points = temperatureVisiblePoints,
-        windowStart = temperatureWindowStart.toLong(),
+        segments = temperatureSegments,
+        windowStart = temperatureWindowStart,
         windowMillis = windowMillis,
-        minimumY = tempMin,
-        maximumY = tempMax,
-        value = { it.temperatureC },
+        axis = temperatureSnapshot.axis,
         onDrag = { dragAmount ->
             temperatureEndFraction = (temperatureEndFraction - dragAmount).coerceIn(0f, 1f)
         },
     )
     Text(
-        "记录最近 24 小时 · 每次显示 2 小时 · 左右拖动分别查看 · 每 15 分钟一个时间节点",
+        "记录最近 8 小时 · 每次显示 2 小时 · 曲线按 LLPower 节奏采样 · 时间节点 15 分钟",
         color = TextSecondary,
         fontSize = 8.sp,
         modifier = Modifier.padding(top = 2.dp),
@@ -804,17 +825,16 @@ private fun ChartCard(
     title: String,
     unit: String,
     color: Color,
-    points: List<ChartPoint>,
+    segments: List<CurveSegment>,
     windowStart: Long,
     windowMillis: Long,
-    minimumY: Float,
-    maximumY: Float,
-    value: (ChartPoint) -> Float,
+    axis: CurveAxis,
     onDrag: (Float) -> Unit,
 ) {
     val textMeasurer = rememberTextMeasurer()
-    val tickStep = if (unit == "W") 5f else 1f
-    val tickCount = (((maximumY - minimumY) / tickStep).roundToInt() + 1).coerceAtLeast(2)
+    val tickCount = axis.tickCount
+    val span = (axis.maximum - axis.minimum).coerceAtLeast(0.001f)
+    val hasData = segments.any { it.points.isNotEmpty() }
     Surface(
         color = Surface,
         shape = RoundedCornerShape(11.dp),
@@ -839,17 +859,17 @@ private fun ChartCard(
                 Canvas(Modifier.fillMaxSize().padding(start = 35.dp, end = 12.dp, top = 10.dp, bottom = 14.dp)) {
                     val right = size.width
                     val bottom = size.height
-                    val span = (maximumY - minimumY).coerceAtLeast(1f)
                     repeat(tickCount) { index ->
                         val y = bottom * index / (tickCount - 1).toFloat()
                         drawLine(Outline, Offset(0f, y), Offset(right, y), 1f)
                     }
                     repeat(tickCount) { index ->
                         val fraction = 1f - index / (tickCount - 1).toFloat()
-                        val value = minimumY + span * fraction
-                        val label = when (unit) {
-                            "W" -> value.roundToInt().toString()
-                            else -> String.format(Locale.getDefault(), "%.1f", value)
+                        val value = axis.minimum + span * fraction
+                        val label = if (unit == "W") {
+                            value.roundToInt().toString()
+                        } else {
+                            String.format(Locale.getDefault(), "%.1f", value)
                         }
                         val measured = textMeasurer.measure(
                             text = label,
@@ -859,17 +879,25 @@ private fun ChartCard(
                             .coerceIn(0f, (bottom - measured.size.height).coerceAtLeast(0f))
                         drawText(measured, topLeft = Offset(-measured.size.width - 5f, y))
                     }
-                    if (points.size >= 2) {
+                    segments.forEach { segment ->
+                        if (segment.points.isEmpty()) return@forEach
                         val path = Path()
-                        points.forEachIndexed { index, point ->
+                        segment.points.forEachIndexed { index, point ->
                             val x = right * ((point.epochMillis - windowStart).toFloat() / windowMillis).coerceIn(0f, 1f)
-                            val y = bottom - bottom * ((value(point) - minimumY) / span).coerceIn(0f, 1f)
+                            val y = bottom - bottom * ((point.value - axis.minimum) / span).coerceIn(0f, 1f)
                             if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                         }
-                        drawPath(path, color, style = Stroke(3f))
+                        if (segment.points.size >= 2) {
+                            drawPath(path, color, style = Stroke(3f))
+                        } else {
+                            val point = segment.points.first()
+                            val x = right * ((point.epochMillis - windowStart).toFloat() / windowMillis).coerceIn(0f, 1f)
+                            val y = bottom - bottom * ((point.value - axis.minimum) / span).coerceIn(0f, 1f)
+                            drawCircle(color, radius = 3f, center = Offset(x, y))
+                        }
                     }
                 }
-                if (points.size < 2) {
+                if (!hasData) {
                     Text("等待采样…", color = TextSecondary, fontSize = 9.sp, modifier = Modifier.align(Alignment.Center))
                 }
             }
@@ -880,7 +908,7 @@ private fun ChartCard(
 
 @Composable
 private fun TimelineLabels(windowStart: Long, windowMillis: Long) {
-    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         repeat(9) { index ->
             Text(
@@ -891,7 +919,6 @@ private fun TimelineLabels(windowStart: Long, windowMillis: Long) {
         }
     }
 }
-
 private val com.oppower.model.BatterySnapshot.statusLabel: String
     get() = when (status) {
         2 -> "充电中"

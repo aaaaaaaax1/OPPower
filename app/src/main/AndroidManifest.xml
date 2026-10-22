@@ -51,6 +51,11 @@
         </receiver>
 
         <receiver
+            android:name=".service.NotificationDismissReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
             android:name=".service.PowerConnectionReceiver"
             android:enabled="true"
             android:exported="false">

@@ -8,11 +8,12 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.IBinder
 import com.oppower.BuildConfig
+import com.oppower.controller.ChargingGateway
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-class ShizukuGateway(context: Context) {
+class ShizukuGateway(context: Context) : ChargingGateway {
     private val appContext = context.applicationContext
     private val bindLock = Any()
     private var commandService: IPrivilegedCommandService? = null
@@ -51,7 +52,7 @@ class ShizukuGateway(context: Context) {
         }
     }
 
-    val isAvailable: Boolean
+    override val isAvailable: Boolean
         get() = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
     val isInstalled: Boolean
@@ -60,7 +61,7 @@ class ShizukuGateway(context: Context) {
             true
         }.getOrDefault(false)
 
-    val hasPermission: Boolean
+    override val hasPermission: Boolean
         get() = runCatching {
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
@@ -115,13 +116,13 @@ class ShizukuGateway(context: Context) {
         runCatching { Shizuku.unbindUserService(userServiceArgs, connection, true) }
     }
 
-    fun readGlobal(name: String): String = execute("settings get global ${name.requireAllowedName()}")
+    override fun readGlobal(name: String): String = execute("settings get global ${name.requireAllowedName()}")
 
-    fun putGlobal(name: String, value: Int) {
+    override fun putGlobal(name: String, value: Int) {
         execute("settings put global ${name.requireAllowedName()} $value")
     }
 
-    fun readThermalPolicy(): String =
+    override fun readThermalPolicy(): String =
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy")
 
     private fun execute(command: String): String = awaitService().execute(command)

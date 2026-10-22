@@ -1,0 +1,10 @@
+OPPower 1.0.0-beta2
+versionCode=2
+built=2026-10-22 19:52:47 +08:00
+apk=OPPower-1.0.0-beta2-debug.apk
+sha256=4159C0DAB41917E694A745FF13AE0AF634E28D52FBF4B17E7B6351F10C1E186B
+
+Changes:
+- Removed all input debounce and the 1.2-second hardware read-back grace window.
+- Every 250 ms control cycle recalculates immediately from the latest observed gear.
+- Target gear remains the acceptance signal; direct cosa writes never pass through zero.

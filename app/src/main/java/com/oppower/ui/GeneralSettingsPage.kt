@@ -195,7 +195,7 @@ private fun SettingsHomePage(
             SettingsMenuRow(
                 icon = "▦",
                 title = "数据管理",
-                summary = "24 小时曲线 · 充放电记录",
+                summary = "24 小时原始记录 · 8 小时曲线",
                 onClick = { onNavigate(SettingsScreen.DATA) },
             )
         }
@@ -646,7 +646,7 @@ private fun DataManagementPage(
             SettingsDivider()
             StatusRow("放电记录", "${state.dischargeRecords.size} 条", true)
             Text(
-                "实时曲线最多保存 24 小时，每 30 秒最多记录一个采样点。所有数据只保存在本机。",
+                "原始曲线记录最多保存 24 小时。充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒采样，图表显示最近 8 小时。所有数据只保存在本机。",
                 color = TextSecondary,
                 fontSize = 9.sp,
                 lineHeight = 15.sp,
@@ -673,7 +673,7 @@ private fun DataManagementPage(
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("清除全部记录？") },
-            text = { Text("24 小时功率与温度曲线、充放电摘要会被删除，此操作不可撤销。") },
+            text = { Text("24 小时原始功率与温度记录、充放电摘要会被删除，此操作不可撤销。") },
             confirmButton = {
                 TextButton(onClick = {
                     onClearHistory()
@@ -697,7 +697,7 @@ private fun FaqPage(onBack: () -> Unit) {
         FaqEntry("为什么设置已经开启却没有生效？", "请先确认系统控制权限、电池优化白名单和常驻服务状态。控制策略无法回读时，应用会主动恢复默认。"),
         FaqEntry("充满后为什么会暂停增强？", "100% 后继续提高充电功率没有意义。应用会恢复偏移并暂停增强，重新拔插后才开始新会话。"),
         FaqEntry("隐藏后台任务会影响快充吗？", "不会。它只把主界面从最近任务中移除，常驻控制服务仍会运行。"),
-        FaqEntry("曲线为什么每 15 分钟才标一个时间节点？", "横轴按 15 分钟显示时间标签，实际数据仍按约 30 秒采样，可以左右滑动查看 24 小时记录。"),
+        FaqEntry("曲线为什么每 15 分钟才标一个时间节点？", "图表默认显示 2 小时窗口，所以横轴按 15 分钟显示时间标签。实际采样与 LLPower 一致：充电亮屏 3 秒、充电熄屏 5 秒、未充电 180 秒。"),
     )
     SettingsPage("常见问题", "功率、读数与后台运行", onBack) {
         entries.forEachIndexed { index, entry ->

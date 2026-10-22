@@ -2,6 +2,7 @@ package com.oppower
 
 import android.Manifest
 import android.app.ActivityManager
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -16,14 +17,15 @@ import com.oppower.ui.MainViewModel
 import com.oppower.ui.OPPowerApp
 import com.oppower.ui.OPPowerTheme
 import rikka.shizuku.Shizuku
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private var foregroundServiceRequested = false
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        ensureServiceStarted()
+        if (granted) ChargeControlService.resumeNotification(this)
+    }
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode == 1001 && grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             viewModel.onShizukuPermissionGranted()
@@ -32,7 +34,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         Shizuku.addRequestPermissionResultListener(permissionListener)
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
@@ -51,8 +52,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            ChargeControlService.start(this@MainActivity)
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
@@ -61,9 +65,33 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.setPageVisible(true)
+        viewModel.refreshShizukuState()
+        ensureServiceStarted()
+        ChargeControlService.resumeNotification(this)
+    }
+
     override fun onResume() {
         super.onResume()
         viewModel.refreshShizukuState()
+        ChargeControlService.resumeNotification(this)
+    }
+
+    override fun onStop() {
+        viewModel.setPageVisible(false)
+        foregroundServiceRequested = false
+        super.onStop()
+    }
+
+    private fun ensureServiceStarted() {
+        if (foregroundServiceRequested) return
+        foregroundServiceRequested = true
+        ChargeControlService.startWhenAvailable(
+            this,
+            onFinished = { foregroundServiceRequested = false },
+        )
     }
 
     private fun setTaskExclusion(excluded: Boolean) {
