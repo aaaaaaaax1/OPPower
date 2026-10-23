@@ -144,6 +144,28 @@ class ShizukuGateway(context: Context) : ChargingGateway {
             .toIntOrNull() == numeric
     }
 
+    override fun requestNativeChargeLevel(level: Int, speedAdd: Int): Boolean {
+        if (speedAdd != 0 || level !in NATIVE_CHARGE_LEVELS) return false
+        val output = execute(
+            "am broadcast -a oplus.intent.action.ACTION_THERMAL_CONTROL_USER_SYSTEM " +
+                "-p com.oplus.battery --es name set_charge --ei level $level " +
+                "--ei speedChargeAdd 0 --es foregroundPkgName com.oppower",
+        )
+        return output.contains("Broadcast completed: result=0")
+    }
+
+    override fun readSmartChgMode(): Int? {
+        val output = execute("service call guardelfthermalcontrol 19")
+        val match = SMART_MODE_RESULT.find(output) ?: return null
+        return match.groupValues[2].toIntOrNull(16)
+    }
+
+    override fun setSmartChgMode(value: Int): Boolean {
+        if (value !in 0..255) return false
+        val output = execute("service call guardelfthermalcontrol 20 s16 $value")
+        return SMART_MODE_RESULT.find(output)?.groupValues?.get(1) == "00000000"
+    }
+
     private fun execute(command: String): String = awaitService().execute(command)
 
     private fun awaitService(): IPrivilegedCommandService {
@@ -166,6 +188,8 @@ class ShizukuGateway(context: Context) : ChargingGateway {
 
     companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+        val NATIVE_CHARGE_LEVELS = setOf(0, 2, 3, 5, 7)
+        val SMART_MODE_RESULT = Regex("""Result: Parcel\(\s*([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})""")
     }
 }
 

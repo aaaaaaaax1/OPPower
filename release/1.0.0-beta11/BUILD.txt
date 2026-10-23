@@ -1,0 +1,18 @@
+OPPower 1.0.0-beta11
+versionCode: 11
+builtAt: 2026-10-23 Asia/Shanghai
+apk: OPPower-1.0.0-beta11-debug.apk
+sha256: 728691F2192D9732E20FE0DF23C9DDD9C2D1CC1D17373737AF1DE270A21E7DF4
+
+Changes:
+- Remove all app reads, writes, restores, and Shizuku allowlist entries for customize_charge_switch_state.
+- Keep cosa_ctc_value target calculation and native charge-level delivery unchanged.
+- Keep GuardElf SmartChgMode=0 enhancement and restore it to the captured original when control ends.
+- Add docs/OPERATIONS.md with prior tests, discoveries, restore steps, A/B procedure, and next priorities.
+
+Validation:
+- 36 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.
+- Installed on RMX8899; versionCode 11 and versionName 1.0.0-beta11 confirmed.
+- customize_charge_switch_state deleted and verified as null.

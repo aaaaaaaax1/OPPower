@@ -1,0 +1,17 @@
+OPPower 1.0.0-beta10
+versionCode: 10
+builtAt: 2026-10-23 Asia/Shanghai
+apk: OPPower-1.0.0-beta10-debug.apk
+sha256: DF9FEB4B3018D561396FBCFE9A7273ED669BF96AE8BC96B17A02AC0A5B78D56B
+
+Changes:
+- Keep cosa_ctc_value calculation and native charge-level delivery together.
+- While charging control is active, ensure system.customize_charge_switch_state=1.
+- While charging control is active, write GuardElf SmartChgMode=0.
+- Capture original values and restore them when control pauses, the master switch is disabled, power is removed, or charging completes.
+- Apply these two enhancement settings once per session; do not repeat writes while stable.
+
+Validation:
+- 34 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.

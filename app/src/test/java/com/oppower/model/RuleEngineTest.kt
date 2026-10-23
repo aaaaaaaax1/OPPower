@@ -61,6 +61,50 @@ class RuleEngineTest {
     }
 
     @Test
+    fun enablingCustomRulesReplacesDefaultTemperatureThresholds() {
+        val settings = RuntimeSettings(
+            baseTier = BaseTier.MAX_OUTPUT,
+            customRulesEnabled = true,
+            customRules = ControlRules(
+                temperatureRules = listOf(
+                    TierRule(44f, ControlTier.GENTLE),
+                    TierRule(45f, ControlTier.PAUSED),
+                ),
+                socRules = listOf(
+                    SocTierRule(90, ControlTier.PAUSED),
+                ),
+            ),
+        )
+
+        assertEquals(ControlTier.MAX_OUTPUT, engine.resolveTier(settings, 42.5f))
+        assertEquals(ControlTier.GENTLE, engine.resolveTier(settings, 44f))
+        assertEquals(ControlTier.PAUSED, engine.resolveTier(settings, 45f))
+    }
+
+    @Test
+    fun enablingCustomRulesReplacesDefaultSocPauseThreshold() {
+        val settings = RuntimeSettings(
+            baseTier = BaseTier.MAX_OUTPUT,
+            customRulesEnabled = true,
+            customRules = ControlRules(
+                temperatureRules = listOf(
+                    TierRule(43f, ControlTier.PAUSED),
+                ),
+                socRules = listOf(
+                    SocTierRule(60, ControlTier.HIGH),
+                    SocTierRule(90, ControlTier.PAUSED),
+                ),
+            ),
+        )
+
+        val atDefaultPauseLevel = decision(settings, 30f, 80)
+        assertEquals(ControlTier.HIGH, atDefaultPauseLevel.tier)
+        assertEquals(1, atDefaultPauseLevel.targetGear)
+        assertEquals(90, engine.socPauseThreshold(settings))
+        assertNull(decision(settings, 30f, 90).targetGear)
+    }
+
+    @Test
     fun gentleTierUsesTemperatureForInternalGear() {
         val settings = RuntimeSettings(baseTier = BaseTier.GENTLE)
 

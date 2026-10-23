@@ -1,0 +1,18 @@
+OPPower 1.0.0-beta9
+versionCode: 9
+builtAt: 2026-10-23 Asia/Shanghai
+apk: OPPower-1.0.0-beta9-debug.apk
+sha256: D8F34B9C7EB7549C522B11F98973F39752EF6DFBBA33940B574FD4731478D90B
+
+Changes:
+- Keep cosa_ctc_value and native charge-level delivery in one control path.
+- Map target gear to ColorOS native D1 charge level and send through the allowlisted set_charge broadcast.
+- Send each mapped native level once per target change; no repeated broadcasts while stable.
+- Fall back to native safety level 2 when control pauses, the master switch is disabled, power is removed, or charging completes.
+- Preserve chargeVal as a read-only diagnostic; native charge-level status is shown separately.
+
+Validation:
+- 33 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.
+- Real-device test with OPPower foreground showed native charge level 0 applied without switching apps.

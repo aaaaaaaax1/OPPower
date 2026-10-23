@@ -49,4 +49,15 @@ class GearCalculatorTest {
         assertEquals(-6, resolved.cosa)
         assertEquals(4, resolved.chargeVal)
     }
+    @Test
+    fun nativeFallbackMatchesGlobalPolicyRows() {
+        assertEquals(0, GearCalculator.nativeChargeLevelForGear(0))
+        assertEquals(0, GearCalculator.nativeChargeLevelForGear(1))
+        assertEquals(7, GearCalculator.nativeChargeLevelForGear(2))
+        assertEquals(7, GearCalculator.nativeChargeLevelForGear(4))
+        assertEquals(5, GearCalculator.nativeChargeLevelForGear(5))
+        assertEquals(3, GearCalculator.nativeChargeLevelForGear(6))
+        assertEquals(2, GearCalculator.nativeChargeLevelForGear(7))
+    }
+
 }

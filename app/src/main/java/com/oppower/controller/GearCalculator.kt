@@ -24,6 +24,21 @@ data class ResolvedGear(
 object GearCalculator {
     const val COSA_MIN = -9
     const val COSA_MAX = 9
+    const val SAFE_NATIVE_CHARGE_LEVEL = 2
+
+    /**
+     * Fallback mapping for the global policy when ColorOS has no policy object
+     * for OPPower itself. [ThermalControlUtils.D1] receives this value as its
+     * charge level, so zero is the least restrictive state used by the high
+     * power path.
+     */
+    fun nativeChargeLevelForGear(targetGear: Int): Int = when {
+        targetGear <= 1 -> 0
+        targetGear <= 4 -> 7
+        targetGear == 5 -> 5
+        targetGear == 6 -> 3
+        else -> SAFE_NATIVE_CHARGE_LEVEL
+    }
 
     fun parseThermalStatus(raw: String): ThermalStatus {
         val levels = Regex("Thermal Levels = \\[([^]]*)]")

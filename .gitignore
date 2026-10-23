@@ -21,3 +21,5 @@ signing/
 /nul
 *.log
 *.trace
+.codex-inspect/
+.gradle-user-home/
