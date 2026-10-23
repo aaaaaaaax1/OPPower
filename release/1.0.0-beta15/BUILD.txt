@@ -1,0 +1,21 @@
+OPPower 1.0.0-beta15
+versionCode=15
+built=2026-10-24 Asia/Shanghai
+apk=OPPower-1.0.0-beta15-debug.apk
+sha256=51FA74AE056B735FC629BC21EE9DFA2008883BFBC3DF46A058902B3482EED1B7
+
+Changes:
+- Reuse an existing chargeVal=0, speedChargeAdd=-2 gate without calling setChargingLevel.
+- Resend native level at most once when the thermal policy category changes to a restricted state.
+- Reset the one-recovery budget when the requested target changes.
+- Do not retry a failed native call every second while the target remains stable.
+- Keep temperature as a safety limit only; temperature never raises the requested gear.
+- Keep one-second live monitoring and LLPower curve cadence.
+
+Validation:
+- 41 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.
+- APK metadata: versionCode 15, versionName 1.0.0-beta15.
+- Installed on RMX8899; WeChat processes and oplus_float_window_show=1 preserved.
+- Charging-path verification is pending because the device was unplugged after installation.

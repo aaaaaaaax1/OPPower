@@ -2,7 +2,7 @@
 
 OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制器。它通过 Shizuku 执行受限的 `settings` 命令，维持 `cosa_ctc_value` 热控偏移，并提供功率、温度、电量监测和本地充放电趋势。
 
-> 当前版本为 `1.0.0-beta14`。仓库包含设计书、可编译源码和本地生成的测试 APK；APK 构建产物不提交到 Git。
+> 当前版本为 `1.0.0-beta15`。仓库包含设计书、可编译源码和本地生成的测试 APK；APK 构建产物不提交到 Git。
 
 ## 功能
 

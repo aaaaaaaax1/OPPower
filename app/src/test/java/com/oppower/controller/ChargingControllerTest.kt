@@ -223,6 +223,65 @@ class ChargingControllerTest {
     }
 
     @Test
+    fun nativeCallIsSkippedWhenPolicyAlreadyHasUnrestrictedGearZeroGate() {
+        val gateway = FakeChargingGateway(
+            cosa = 0,
+            gear = 8,
+            policyCategory = "common_config",
+            policyChargeVal = 0,
+            policySpeedAdd = -2,
+        )
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+
+        assertEquals(listOf(-8), gateway.writes)
+        assertEquals(1, gateway.refreshRequests)
+        assertTrue(gateway.nativeChargeLevels.isEmpty())
+    }
+
+    @Test
+    fun categoryChangeGetsAtMostOneRecoveryNegotiation() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 8, policyCategory = "float_scene")
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+        assertEquals(listOf(0), gateway.nativeChargeLevels)
+
+        gateway.policyCategory = "restricted_scene"
+        controller.evaluate(enabled, battery())
+        assertEquals(listOf(0, 0), gateway.nativeChargeLevels)
+
+        gateway.policyCategory = "another_restricted_scene"
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+        assertEquals(listOf(0, 0), gateway.nativeChargeLevels)
+        assertEquals(listOf(-2, -2), gateway.nativeSpeedChargeAdds)
+    }
+
+    @Test
+    fun failedNativeCallIsNotRetriedWhileStable() {
+        val gateway = FakeChargingGateway(
+            cosa = 0,
+            gear = 8,
+            nativeRefreshSucceeds = false,
+        )
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        val first = controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+
+        assertEquals(listOf(0), gateway.nativeChargeLevels)
+        assertTrue(first.message.contains("下发失败"))
+    }
+
+    @Test
     fun smartModeIsConfirmedOnlyOncePerChargingSession() {
         val gateway = FakeChargingGateway(cosa = 0, gear = 8)
         val controller = ChargingController(gateway)
@@ -268,6 +327,9 @@ class ChargingControllerTest {
         var refreshSucceeds: Boolean = true,
         var nativeRefreshSucceeds: Boolean = true,
         var smartMode: Int = 1,
+        var policyCategory: String = "test_scene",
+        var policyChargeVal: Int? = 12,
+        var policySpeedAdd: Int? = 1,
     ) : ChargingGateway {
         override val isAvailable = true
         override val hasPermission = true
@@ -290,7 +352,7 @@ class ChargingControllerTest {
         }
 
         override fun readThermalPolicy(): String {
-            return "categoryName: test_scene\ngearVal: $gear\nchargeVal: 12\nspeedChargeAdd: 1"
+            return "categoryName: $policyCategory\ngearVal: $gear\nchargeVal: ${policyChargeVal ?: "--"}\nspeedChargeAdd: ${policySpeedAdd ?: "--"}"
         }
 
         override fun readThermalStatus(): String {

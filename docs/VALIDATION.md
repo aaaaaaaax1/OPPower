@@ -132,6 +132,8 @@ V12 `ICharger` 的 `ChgFuncFlag.SET_CHG_UP_LIMIT_VALUE` 名字容易被误认为
 
 - `1.0.0-beta14` 移除稳定期每 3 秒重发原生 level 的设计。beta8 没有主动下发 `setChargingLevel`；beta14 仅在首次进入目标或原生 level / speedAdd 变化时下发一次。`SmartChgMode` 改为每个充电会话只确认一次，避免控制循环每秒重复执行 Binder 读取。38 项单测、`lintDebug` 和 `assembleDebug` 全部通过；APK 位于 `release/1.0.0-beta14/OPPower-1.0.0-beta14-debug.apk`。
 
+- `1.0.0-beta15` 将实际充电门控改为事件驱动：读到已有 `chargeVal=0, speedChargeAdd=-2` 时跳过 native 调用；策略 category 变为受限状态时最多补一次协商；native 失败不在稳定期每秒重试。温度规则继续只做安全降档。41 项单测、`lintDebug` 和 `assembleDebug` 全部通过；APK 位于 `release/1.0.0-beta15/OPPower-1.0.0-beta15-debug.apk`。
+
 ## beta11 参数面复核（2026-10-23）
 
 - 应用已移除 `customize_charge_switch_state` 全部读写和命令白名单，保留 `SmartChgMode=0`。
@@ -211,3 +213,21 @@ GuardElf 权限边界补充：事务 34–39 对 shell 返回 `READ_COMMON` 拒�
 `chargeVal=--` 的根因也已复核：OPPower 自身不在 ROM 热控 XML 的包名分类中，OPPower 前台时原生策略对象可以为 `null`，本周期不调用 `D1()`，实际充电控制可能保持上一条下发值。切回桌面后原生策略对象立即生成，读到的示例为 `gearVal=5, chargeVal=6, speedChargeAdd=1`。因此计算 gear 只表示 OPPower 根据基础档和 cosa 得到的目标；需要另行验证原生策略对象为空时是否必须通过系统代执行 `set_charge` 才能保证实际下发。
 
 接电后的第二轮顺序应固定为：先记录 gear0 的自然基线；再测 `send_pkg`/场景广播；再测 `set_charge` 正 speedAdd；最后才评估长充保护 wattage。每组至少记录电池侧 `|current × voltage|`、输入侧功率计、`Thermal Levels[0]`、计算 gear、`chargeVal`、`speedChargeAdd`、电量和电池温度，并确认恢复真实包名、场景及 GuardElf 原值。
+## 温度与功率因果复核（2026-10-24）
+
+下午高功率记录不能证明“温度越高，功率越高”。更直接的证据如下：
+
+- `15:33:14.595` 到 `15:33:21.260`，电池温度保持约 37.2°C，热控温度保持 37.936°C，功率却从 15.58 W 跳到 32.38 W。
+- 同一段内，热控策略从 `chargeVal=6, speedChargeAdd=1` 变为 `chargeVal=0, speedChargeAdd=-2`，充电电流从 -3.914 A 变为 -7.897 A。
+- `15:57` 一段温度约 39.98°C，基础档 7、计算 gear 0，但功率只有约 15.39 W；温度更高没有带来更高功率。
+- beta12/beta13 在约 38.5°C、计算 gear 0 时读到的浮窗场景策略仍为 `chargeVal=12`，功率约 10–11 W。
+
+因此，温度上升经常是前一段高功率或前台负载造成的结果，而不是允许更高功率的输入条件。控制逻辑不能为追求高功率主动升温，也不能把温度作为升档依据。温度只用于安全限制和降档。
+
+下一轮需要在低 SOC（建议 60–70%）、相同充电器和线材、真实亮屏、保留微信浮窗的条件下做三组单变量测试：
+
+1. 仅写入目标 `cosa` 并触发一次 `m2()`，不调用 `setChargingLevel`。
+2. 在相同策略下仅调用一次 `setChargingLevel 0`，确认能否从 `chargeVal=12` 场景进入 30 W 以上。
+3. 若高功率只短暂出现，记录系统下一次覆盖它的来源（`m2()`、`float_window_scene_102`、cooldown 写回或充电协议状态），寻找单次写入能持久生效的更高层入口。
+
+复测前必须核对 SOC、温度、充电器协商电压/电流、基础档、`cosa`、计算 gear、policy category、`chargeVal`、`speedChargeAdd` 和实际功率。只有功率变化先于温度变化、且排除 SOC 与协商条件后，才能把某个温度相关参数视为候选增益。
