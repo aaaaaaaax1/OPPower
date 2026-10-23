@@ -20,9 +20,12 @@ class AllowedCommandsTest {
         assertTrue(AllowedCommands.matches("dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus"))
         assertTrue(
             AllowedCommands.matches(
-                "am broadcast -a oplus.intent.action.ACTION_THERMAL_CONTROL_USER_SYSTEM " +
-                    "-p com.oplus.battery --es name set_charge --ei level 0 " +
-                    "--ei speedChargeAdd 0 --es foregroundPkgName com.oppower",
+                "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 0",
+            ),
+        )
+        assertTrue(
+            AllowedCommands.matches(
+                "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 7",
             ),
         )
     }
@@ -50,9 +53,12 @@ class AllowedCommandsTest {
         assertFalse(AllowedCommands.matches("service call guardelfthermalcontrol 20 s16 0; reboot"))
         assertFalse(
             AllowedCommands.matches(
-                "am broadcast -a oplus.intent.action.ACTION_THERMAL_CONTROL_USER_SYSTEM " +
-                    "-p com.oplus.battery --es name set_charge --ei level 1 " +
-                    "--ei speedChargeAdd 0 --es foregroundPkgName com.oppower",
+                "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 1",
+            ),
+        )
+        assertFalse(
+            AllowedCommands.matches(
+                "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 0; reboot",
             ),
         )
         assertFalse(AllowedCommands.matches("rm -rf /data/local/tmp/oppower"))

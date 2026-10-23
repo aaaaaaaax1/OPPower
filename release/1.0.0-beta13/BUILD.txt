@@ -1,0 +1,22 @@
+OPPower 1.0.0-beta13
+versionCode=13
+built=2026-10-24 00:55 Asia/Shanghai
+apk=OPPower-1.0.0-beta13-debug.apk
+sha256=9968DFA7E4312A710916827CF2194DA6A17527096123D189D3C694EB36D597C9
+
+Changes:
+- Native charge level uses the BatteryService debug entry setChargingLevel.
+- Stable target state re-sends the native level every 3 seconds.
+- The ineffective set_charge broadcast path was removed.
+
+Validation:
+- 37 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.
+- APK metadata: versionCode 13, versionName 1.0.0-beta13.
+- Installed on RMX8899 while WeChat and its floating overlay remained alive.
+- A 25-second foreground run logged eight setChargingLevel 0 calls.
+- Every call reached setSmartCoolDown: coolDown = 0 and HAL set cooldown:0.
+- No nonzero cooldown write appeared during the run.
+- Power stayed approximately 11.10-11.53 W at 88% battery with WeChat floating overlay active.
+- Conclusion: repeated native-level delivery is confirmed, but it did not raise power under the tested high-SOC floating-overlay condition.

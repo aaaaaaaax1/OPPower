@@ -1,0 +1,20 @@
+OPPower 1.0.0-beta12
+versionCode: 12
+builtAt: 2026-10-24 Asia/Shanghai
+apk: OPPower-1.0.0-beta12-debug.apk
+sha256: 46D1B719E9D8C6047747DF9DD6B9AB90B4FA9329C0AE30D7B1FED251BB88D2D9
+
+Changes:
+- Send gear 0 as set_charge(level=0, speedChargeAdd=-2).
+- Reapply the native charge gate every 3 seconds while the target remains stable.
+- Keep immediate cosa and native charge updates when the target or thermal base changes.
+- Keep level 1 as set_charge(0,0), other gear mappings unchanged, and safe restore at level 2.
+- Restrict Shizuku allowlisting to speed -2 only when level is 0.
+- Document the complex-scene chargeVal=12 override and the remaining live-power validation.
+
+Validation:
+- 37 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.
+- APK metadata: versionCode 12, versionName 1.0.0-beta12.
+- Live charging-power validation is pending because the phone was unplugged during the final sampling run.

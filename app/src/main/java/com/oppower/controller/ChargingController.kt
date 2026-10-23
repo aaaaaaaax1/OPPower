@@ -22,8 +22,8 @@ interface ChargingGateway {
     fun requestThermalPolicyRefresh(): Boolean
 
     /**
-     * Calls ColorOS ThermalControlUtils.D1 through its system broadcast. This
-     * remains available when getCurThermalPolicy is null because OPPower has no
+     * Calls the ColorOS BatteryService debug path that reaches D1(). This remains
+     * available when getCurThermalPolicy is null because OPPower has no
      * package-specific thermal policy.
      */
     fun requestNativeChargeLevel(level: Int, speedAdd: Int = 0): Boolean = false
@@ -35,6 +35,7 @@ interface ChargingGateway {
 class ChargingController(
     private val shizuku: ChargingGateway,
     private val rules: RuleEngine = RuleEngine(),
+    private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
     private var sessionSocLocked = false
     private var lastAcForSession: Boolean? = null
@@ -44,12 +45,14 @@ class ChargingController(
     private var lastAppliedGear: Int? = null
     private var lastObservedGear: Int? = null
     private var lastNativeChargeLevel: Int? = null
+    private var lastNativeSpeedChargeAdd: Int? = null
     private var appliedTier: ControlTier? = null
     private var temperatureCandidateGear: Int? = null
     private var temperatureCandidateSince = 0L
     private var controlSettingsSnapshot: ControlSettings? = null
     private var pausedFromGear: Int? = null
     private var smartChgModeOriginal: Int? = null
+    private var smartChgModeEnsured = false
 
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
@@ -123,7 +126,7 @@ class ChargingController(
                     restoreBoth()
                     return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
                 }
-                val now = System.currentTimeMillis()
+                val now = nowMillis()
                 val holdSeconds = settings.temperatureDownshiftSeconds.coerceAtLeast(1)
                 if (temperatureCandidateGear != TEMPERATURE_PAUSE_CANDIDATE) {
                     temperatureCandidateGear = TEMPERATURE_PAUSE_CANDIDATE
@@ -186,13 +189,19 @@ class ChargingController(
             val wrote = if (needsApply && currentCosa != desiredCosa) writeCosa(desiredCosa) else false
             val refreshRequested = if (needsApply) requestThermalRefresh() else false
             val nativeLevel = GearCalculator.nativeChargeLevelForGear(target)
-            val nativeNeedsApply = lastNativeChargeLevel != nativeLevel
+            val nativeSpeedAdd = GearCalculator.nativeSpeedChargeAddForGear(target)
+            val nativeNeedsApply = lastNativeChargeLevel != nativeLevel ||
+                lastNativeSpeedChargeAdd != nativeSpeedAdd
             val nativeApplied = if (nativeNeedsApply) {
-                runCatching { shizuku.requestNativeChargeLevel(nativeLevel, 0) }.getOrDefault(false)
+                runCatching { shizuku.requestNativeChargeLevel(nativeLevel, nativeSpeedAdd) }
+                    .getOrDefault(false)
             } else {
                 false
             }
-            if (nativeNeedsApply && nativeApplied) lastNativeChargeLevel = nativeLevel
+            if (nativeNeedsApply && nativeApplied) {
+                lastNativeChargeLevel = nativeLevel
+                lastNativeSpeedChargeAdd = nativeSpeedAdd
+            }
             val calculatedGear = baseGear + currentCosa
             val verified = calculatedGear == target
 
@@ -224,6 +233,8 @@ class ChargingController(
                     chargeVal?.let { append(" · chargeVal=$it") }
                     append(" · 原生充电级=")
                     append(nativeLevel)
+                    append(" · speedAdd=")
+                    append(nativeSpeedAdd)
                     if (nativeNeedsApply && !nativeApplied) append("（下发失败）")
                     if (!enhancementsReady) append(" · 快充增强设置未完全生效")
                 },
@@ -287,11 +298,14 @@ class ChargingController(
         lastFull = false
         lastAppliedGear = null
         lastObservedGear = null
+        lastNativeChargeLevel = null
+        lastNativeSpeedChargeAdd = null
         appliedTier = null
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
         controlSettingsSnapshot = null
         pausedFromGear = null
+        smartChgModeEnsured = false
     }
 
     private fun confirmGear(
@@ -300,7 +314,7 @@ class ChargingController(
         tier: ControlTier,
     ): Int? {
         val current = lastAppliedGear ?: pausedFromGear
-        val now = System.currentTimeMillis()
+        val now = nowMillis()
         val controlSettings = ControlSettings(
             baseTier = settings.baseTier,
             customRulesEnabled = settings.customRulesEnabled,
@@ -373,17 +387,24 @@ class ChargingController(
     }
 
     private fun ensureSmartChgModeDisabled(): Boolean {
+        if (smartChgModeEnsured) return true
         if (smartChgModeOriginal == null) {
             smartChgModeOriginal = runCatching { shizuku.readSmartChgMode() }.getOrNull() ?: return false
         }
         val current = runCatching { shizuku.readSmartChgMode() }.getOrNull() ?: return false
-        if (current == 0) return true
-        return runCatching {
+        if (current == 0) {
+            smartChgModeEnsured = true
+            return true
+        }
+        val applied = runCatching {
             shizuku.setSmartChgMode(0) && shizuku.readSmartChgMode() == 0
         }.getOrDefault(false)
+        if (applied) smartChgModeEnsured = true
+        return applied
     }
 
     private fun restoreSmartChgMode() {
+        smartChgModeEnsured = false
         val original = smartChgModeOriginal ?: return
         val restored = runCatching {
             shizuku.setSmartChgMode(original) && shizuku.readSmartChgMode() == original
@@ -398,6 +419,7 @@ class ChargingController(
         lastAppliedGear = null
         lastObservedGear = null
         lastNativeChargeLevel = null
+        lastNativeSpeedChargeAdd = null
         appliedTier = null
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L

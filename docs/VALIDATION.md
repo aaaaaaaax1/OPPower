@@ -81,6 +81,7 @@ V12 `ICharger` 的 `ChgFuncFlag.SET_CHG_UP_LIMIT_VALUE` 名字容易被误认为
 | `SmartChgMode=0` 单独测试 | `cosa=-6`，基础档 7，计算 gear 1，`customize` 未设置 | 前后均约 38.1–38.9W；`chargeVal=0`、`speedChargeAdd=-2` 不变；恢复后回读 `SmartChgMode=1` | 该条件下没有立即观察到独立增益 |
 | `customize=1` + `SmartChgMode=0` 组合 | gear0；`customize=1` 保持生效 | 2026-10-23 15:59 用户实测写入 `SmartChgMode=0` 后功率约提高 1–3W，实际增益可能更高；写入后回读为 0，当时电量 81%、温度约 39.5°C、电池侧约 14.2W | 组合路径有正收益，作为候选保留；尚不能把增益全部归因于 `SmartChgMode` 单独作用 |
 | `set_charge(level=0, speedChargeAdd=0)` | 同一 `cosa`、同一前台包 `com.android.launcher` | 广播返回 `result=0`；发送前约 38.2–39.5W，发送后约 39.0–39.3W；`chargeVal` 和 `speedChargeAdd` 不变 | 没有独立功率增益。源码确认该路径最终调用 `setSmartCoolDown(0,0,pkg)` |
+| `set_charge(level=0, speedChargeAdd=-2)` | beta12 使用该系统广播 | 广播返回 `result=0`，但接电日志中没有对应的 `setSmartCoolDown`，HAL 未变化 | 排除广播下发；`result=0` 不能证明接收器执行 |
 | `OplusBatteryService setChargingLevel 0` | 2026-10-23 16:03，OPPower 前台，gear0，`SmartChgMode=0`，`customize=null` | 命令返回 `set charging level = 0`；当时电量 84%、温度约 38.0°C、电池侧约 16.3W；用户实测确认有效提升，实际幅度可能更高 | 纳入组合验证候选；与之前的 `set_charge` 广播结果不同，说明当前组合状态和直接下发路径仍需继续对照 |
 | `setPsySlowChgEnable(60,33,0)` | GuardElf 事务 38，参数 `i32 60 i32 33 i32 0` | Binder 返回异常：`com.oplus.permission.safe.READ_COMMON`；ADB/Shizuku shell uid 2000 无权调用，未发生状态变化 | 普通 shell/Shizuku 路径不可用；需要系统签名或拥有 `READ_COMMON` 的进程，不能作为 OPPower 当前权限下的提速入口 |
 | 降温恢复 | `cosa=0`，调用 `setChargingLevel 2` | 功率从约 36.9W 在约 10 秒内降到 6.8W，随后稳定约 6.2W；热控温度从 42.2°C 开始回落 | 充电控制通道可实际压低功率；策略缓存 `gearVal` 仍为 1，不能把它当作真实下发状态 |
@@ -95,7 +96,7 @@ V12 `ICharger` 的 `ChgFuncFlag.SET_CHG_UP_LIMIT_VALUE` 名字容易被误认为
 - `getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示或验收，代码只读取 `chargeVal` 作独立诊断。
 - 目标变化、首次开启或检测到外部 `cosa` 漂移时，直接覆盖动态计算出的目标值并回读 `cosa`，不先写 `0`。
 - 写入后只触发一次系统热控重算：把 `oplus_camera_3rd_activity` 的同一整数在 `0/00` 或 `1/01` 之间切换。数值不变，监听回调调用 `m2()`；系统内部安排约 5 秒后的计算。
-- 同一目标保持且基础档未变化时不重复写 `cosa`、不重排 `m2()`，也不执行 3 秒重试。应用继续每秒读取基础档和 `cosa`。
+- 同一目标保持且基础档未变化时不重复写 `cosa`、不重排 `m2()`，也不重复下发原生 `setChargingLevel`。应用继续每秒读取基础档和 `cosa`；`SmartChgMode` 每个充电会话只确认一次。
 - `基础档 + cosa == target` 即达到计算目标；`policy.gear` 缓存和 `chargeVal` 都不参与该判断。
 - 温度下降 5 秒、恢复 8 秒的确认仍属于热安全规则；用户选择和档位切换没有防抖。
 - 只有拔电、关闭总开关、电量暂停、充满或停止服务才恢复 `cosa=0`，并在实际写入时触发一次系统重算。软件不读取或写入 `single_speed_charge_state`。
@@ -125,6 +126,12 @@ V12 `ICharger` 的 `ChgFuncFlag.SET_CHG_UP_LIMIT_VALUE` 名字容易被误认为
 
 - `1.0.0-beta11` 移除 `customize_charge_switch_state` 的读取、写入、恢复和 Shizuku 命令白名单，保留 `cosa`、原生充电级直发与 GuardElf `SmartChgMode=0`。36 项单测、`lintDebug` 和 `assembleDebug` 全部通过；APK 位于 `release/1.0.0-beta11/OPPower-1.0.0-beta11-debug.apk`，安装后 versionCode 11、versionName 1.0.0-beta11。设备上的 `customize_charge_switch_state` 已删除并回读为 null。
 
+- `1.0.0-beta12` 将 gear 0 的原生下发从 `set_charge(0,0)` 改为 `set_charge(0,-2)`，目标稳定时每 3 秒重新确认一次；档位或 `cosa` 变化仍立即处理。源码与 Shizuku 白名单只增加 level 0 对应的 speed -2。设备采样时已拔电，因此功率效果尚待真机接电验收。
+
+- `1.0.0-beta13` 修复 beta12 的未生效广播：接电日志确认 `set_charge` 只返回广播成功，没有进入 `D1()`；改为 `OplusBatteryService setChargingLevel` 后，logcat 明确出现 `setSmartCoolDown(0,0)` 和 HAL `set cooldown:0`。37 项单测、`lintDebug` 和 `assembleDebug` 通过。APK 位于 `release/1.0.0-beta13/OPPower-1.0.0-beta13-debug.apk`，SHA-256 为 `9968DFA7E4312A710916827CF2194DA6A17527096123D189D3C694EB36D597C9`。真机保留微信及 `TYPE_APPLICATION_OVERLAY` 浮窗时，25 秒内 8 次 level 0 都到达 HAL，但 88% SOC 下功率保持约 11.10–11.53 W；浮窗复杂场景和当前协商状态仍占主导。
+
+- `1.0.0-beta14` 移除稳定期每 3 秒重发原生 level 的设计。beta8 没有主动下发 `setChargingLevel`；beta14 仅在首次进入目标或原生 level / speedAdd 变化时下发一次。`SmartChgMode` 改为每个充电会话只确认一次，避免控制循环每秒重复执行 Binder 读取。38 项单测、`lintDebug` 和 `assembleDebug` 全部通过；APK 位于 `release/1.0.0-beta14/OPPower-1.0.0-beta14-debug.apk`。
+
 ## beta11 参数面复核（2026-10-23）
 
 - 应用已移除 `customize_charge_switch_state` 全部读写和命令白名单，保留 `SmartChgMode=0`。
@@ -140,7 +147,7 @@ V12 `ICharger` 的 `ChgFuncFlag.SET_CHG_UP_LIMIT_VALUE` 名字容易被误认为
 2. 接电并开启总开关，保持 OPPower 前台，不切换应用；确认控制循环自动读取 `Thermal Levels[0]` 和 `cosa` 并计算 gear。
 3. 选择“最大输出”，每 200–300 ms 采样 `cosa_ctc_value` 和 `Thermal Levels`。确认 `基础档 + cosa = 目标 gear`；例如基础档为 6 时必须写 `cosa=-6`。同时故意保留旧 `policy.gear`，确认它不影响计算结果。
 4. 开启强制亮屏快充后首次选择规则，保持 OPPower 前台并确认无需切换应用即可写入；切换基础档或自定义规则时确认写入序列不包含中间 `cosa=0`，且每个目标只触发一次重算。
-5. 外部或系统把 `cosa` 改错后，确认控制器在下一周期按最新基础档重新计算并修正一次；稳定到目标后不重复写。缓存 gear 未变化时确认应用不进行 3 秒重试。
+5. 外部或系统把 `cosa` 改错后，确认控制器在下一周期按最新基础档重新计算并修正一次；稳定到目标后不重复写 `cosa`，也不重复下发 `setChargingLevel`；仅在目标或原生映射变化时检查一次 cooldown 调用。
 6. 在抖音、B 站和桌面之间切换，每档至少观察 60 秒，确认稳定目标不重复写；只有基础档或 `cosa` 变化时重新计算。
 7. 分别验证 41/42/43°C 默认温度条件、80% 电量暂停和 100% 恢复系统默认；温度降档持续 5 秒、恢复持续 8 秒。
 8. 拔电后确认 `cosa=0`；再插电确认直接读取当前 `cosa` 和 gear 建立闭环，不执行“基础 gear 重校准”。

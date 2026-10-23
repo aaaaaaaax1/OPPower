@@ -23,7 +23,7 @@
 
 OPPower 每秒重新计算目标。基础档或外部 `cosa` 变化时，只写一次新的 `cosa` 并触发一次热控重算，不先经过 `cosa=0`。
 
-目标 gear 同时映射为原生充电级并通过 `set_charge` 下发：
+目标 gear 同时映射为原生充电级，并通过 BatteryService 的 `setChargingLevel` 调试入口下发：
 
 | 目标 gear | 原生充电级 |
 | ---: | ---: |
@@ -42,7 +42,7 @@ OPPower 每秒重新计算目标。基础档或外部 `cosa` 变化时，只写�
 | 入口 | 已验证结果 | 使用结论 |
 | --- | --- | --- |
 | `cosa_ctc_value` | 能按基础档计算目标 gear；外值漂移后下一周期可纠正；切换目标不经过 0 | 核心控制路径，稳定保留 |
-| 原生 `set_charge` level | `getCurThermalPolicy=null` 时仍能把目标 gear 对应的原生 level 下发；beta9 真机显示原生 level 0 | 核心控制路径，稳定保留 |
+| BatteryService `setChargingLevel` | 目标进入或原生映射变化时，在 BatteryService 内部调用 `D1()` 并到达 cooldown HAL；稳定期不重复下发 | beta14 核心控制路径 |
 | `SmartChgMode=0` + 当时的 `customize=1` | 2026-10-23 15:59，81%、约 39.5°C、约 14.2W 时，用户实测提高约 1–3W，实际增益可能更高 | 有组合正收益；beta11 已移除 `customize`，独立 A/B 待接电复测 |
 | `setChargingLevel 0` / `set_charge(0,0)` | 2026-10-23 16:03，84%、约 38.0°C、约 16.3W 时，用户实测有效提升 | 作为 `D1()` 下游覆盖路径保留；与原生 level 0 有重叠，不重复叠加 |
 
@@ -60,7 +60,7 @@ OPPower 每秒重新计算目标。基础档或外部 `cosa` 变化时，只写�
 | `setPsySlowChgEnable` | shell/Shizuku 身份返回 `READ_COMMON` 权限拒绝 | 当前应用路径不可用 |
 | `QuickModeGain` | GuardElf 事务 27 可读接口存在，但读取返回 `READ_COMMON` 权限拒绝 | 不能作为应用可读反馈，也不构成写入入口 |
 | Charger HAL 直连 | `setChgConfig`、`setChargerCoolDown`、慢充配置等接口存在；shell 直连返回权限拒绝或 DeadObject | 当前不可用，不能凭接口名盲测 |
-| `speedChargeAdd` | `D1()` 只在 single-speed 条件成立时把它加到原生 level；负值可能生成无效 level，正值只改变 level 编号 | 它不是独立升功率倍率；不作为稳定增益 |
+| `speedChargeAdd` | `D1()` 只在 single-speed 条件成立时把它加到原生 level；负值可能生成无效 level，正值只改变 level 编号。2026-10-23 正常模式下实测 `level=4, speedAdd=4` 没有增益 | 它不是独立升功率倍率；不打开 single-speed 专门触发该分支 |
 | `Max charging current=2000000` | `dumpsys battery` 观测字段，当前不同 SOC 下都有出现，不能证明它是可写的硬件限流 | 只记录，不通过 `cmd battery set current_now` 伪造读数 |
 | `setChargerCycle`、`setChgOlcConfig`、`setChgRusConfig`、`setChgConfig` | 系统权限拒绝；长期恢复行为不明确 | 不盲测 |
 | `SmartChgMode` 的 2/3 等非 bit0 值 | bit 语义未确认 | 不盲写 |
@@ -201,3 +201,367 @@ ADB 端口：
 恢复：各项最终值及回读
 备注：是否出现通知、刷新、gear 回读或温度异常
 ```
+
+## 12. 第三轮参数发现（2026-10-23）
+
+本节记录第三轮源码审计和只读权限确认。本轮**未接电做功率 A/B**，所有“可能增益”只表示参数会进入充电决策链，不代表已实测能提高功率。只读基线为 RMX8899 / ColorOS 17.0.0.106、SOC 87%、未接电、电池约 39.2°C、`Thermal status=7`、`Thermal Levels=[7]`、`cosa_ctc_value=0`、抖音极速版策略 `gearVal=7`、`chargeVal=3`、`speedChargeAdd=-2`。`ro.debuggable=0`，SELinux 为 Enforcing，`sys.deepsleep.allow.debug` 为空；shell 访问 `/sys/class/oplus_chg/*` 和 `/sys/class/power_supply/battery/current_now` 均为 Permission denied。
+
+### 12.1 第三轮参数表
+
+| 参数 / 入口 | 写入语义 | 原值 / 默认值 | 潜在增益机制 | 当前权限状态 | 恢复方式 | 风险 | 当前结论 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ConfigFS `bcc_current` | 整数单位 `0.1A`；内部换算为 mA。双电芯直接使用换算值，单电芯投票值再除以 2；分别投 `VOOC_CURR`、UFCS/PPS 的 `BCC_VOTER` | 实际原值当前不可读；`0` 表示撤销 BCC 投票 | 清除残留 BCC 限流；若要提高，只能依赖其他 `VOTE_MIN` 安全票允许更高值 | shell `stat` 已拒绝；Shizuku 的 shell/2000 身份同样不能绕过 SELinux；需要系统代执行 | 写 `0` 撤销 `BCC_VOTER`；若原值非 0，正式集成前必须先建立可读回或保存机制 | 高 | **权限阻塞，未测**。不能把“写入较大值”当作主动升功率，`VOTE_MIN` 仍取所有安全票最小值 |
+| GKI `battery/current_now` | `battery_psy_set_prop()` 把输入值同时投到 `WIRED_ICL`、`VOOC_CURR`、`UFCS_CURR`、`PPS_CURR`；快充 ICL 最低按 1500mA；`0` 撤销 HIDL 投票 | 系统动态电流；恢复值通常为 `0`，但写入单位及其 sysfs 转换仍需真机确认 | 可撤销 HIDL 留下的电流上限并触发重算；受其他 `VOTE_MIN` 票约束，本身不能突破安全上限 | `/sys/class/power_supply/battery/current_now` 读取/`stat` 均 Permission denied；还受 `oplus,smart_charging_screenoff` 设备树门控，当前节点不可读 | 写 `0` 撤销 `HIDL_VOTER`；若设备未开启 `smart_charging_screenoff`，写入直接返回不支持 | 高 | **权限阻塞，未测**。只适合作为“释放残留限流”候选 |
+| GuardElf `setPsySlowChgEnable` / ConfigFS `slow_chg_en` | 三参数 `pct,watt,en`；`en=0` 释放慢充限流，`en=1` 进入慢充限制 | 当前节点不可读；系统调试命令实际固定使用 `pct=240, watt=33, status=<参数>` | 若系统或旧会话遗留慢充票，`status=0` 可释放；`status=1` 只会在约 33W 内限流，不是升功率开关 | GuardElf 源码要求 `com.oplus.permission.safe.READ_COMMON`；shell 调用被拒绝，需要系统进程代执行 | `status=0`；恢复到调用前状态 | 中 | **恢复候选，未测**。旧记录里的 `60,33` 已过时，当前 APK 源码静态值为 `240,33` |
+| ConfigFS `cool_down` / `setSmartCoolDown` | 写 `0` 只撤销 `USER_VOTER`，不会清掉温度、SOC、适配器等其他投票 | 实际原值不可读；恢复写 `0` 或原值 | 仅释放用户侧残留降温票；其他票存在时不会提升 | ConfigFS 节点 shell 拒绝；系统代执行可用性未确认 | 写 `0` 撤销用户票 | 中 | **仅释放限流，不保证增益** |
+| Android `POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT` | 对外报告 `6500000`，最大档位为 `1`，属性标成可写 | 固定显示值 | 名字看起来像充电上限，实际 `battery_psy_set_prop()` 对应分支直接 `break` | 伪可写，不产生内核动作 | 无需恢复 | 低 | **已排除**。写入不会提高或降低真实充电电流 |
+| `normal_current_now` | 把当前值保存为 Quick Mode 统计/增益基线 | 动态；离线时内部归零 | 不直接设置充电电流 | ConfigFS 节点本身同样受 shell 权限限制 | 写 `0` | 低 | **只统计，已排除** |
+| `normal_cool_down` | 保存 Quick Mode 的“普通档”基线；非 0 时 `normal_current` 更新会被跳过 | 动态；恢复 `0` | 不改变当前充电档，最多影响 Quick Mode 统计 | 同 ConfigFS 权限边界 | 写 `0` | 低 | **只统计，已排除** |
+| `chg_up_limit` | 解析充电上限状态、SOC 和重充阈值，不是瓦数或电流倍率 | 系统当前 SOC 上限配置 | 可能改变何时显示充满/重充，不提供更高瞬时功率 | ConfigFS shell 拒绝 | 写回系统原配置；不可凭猜测构造 | 中 | **不是升功率入口** |
+| ConfigFS `fast_chg_type` | 只覆盖用户可读的快速充电类型；内部适配器功率镜像也可能读取该覆盖值 | `0` 时用真实类型 | 不会改变 VOOC/UFCS 电流；伪造类型反而会污染诊断和策略读数 | ConfigFS shell 拒绝 | 写 `0` | 中 | **显示镜像，已排除** |
+| ConfigFS `bcc_parms` | 在 `BCC_SET_DEBUG_PARMS` 开启时覆盖 BCC 读取数据 | 实际 BCC 曲线参数 | 只影响读出的 BCC 参数；没有生产电流 setter | ConfigFS shell 拒绝 | 关闭调试字符串，恢复真实读取 | 中 | **不等同于 `bcc_current`，已排除为升功率项** |
+| 内核 `supplementary_power_mos` | 电池均衡/补充放电路径的控制 MOS，内部函数为 `oplus_wired_set_supplementary_power_mos(topic, bool)` | 由电池均衡状态控制 | 可能改变并联电池路径，但代码把它归入电池均衡与异常保护 | 没有 ConfigFS 或 HAL 公共写入入口；只能走内核内部调用 | 由电池均衡离线清理逻辑复位为关闭 | 高 | **可达性阻塞**。不作为普通单向提功率入口 |
+| ConfigFS `bms_heat_temp_compensation` | 当壳体温度低于 `OPLUS_BMS_HEAT_THRE=250`（25°C）时，从壳体温度减去该补偿值 | 默认 `0` | 通过降低低温场景的热控输入影响策略 | ConfigFS shell 拒绝 | 写 `0` | 高 | **当前 39–42°C 场景不会触发，测试注入性质，排除** |
+| OplusBatteryService `setThermalControlTest 1` + `setTempLevel` | 直接令热控采用测试档位数组，可替换 `Thermal Levels[0]` | 测试模式关闭 | 可把基础热档调高，再用负 `cosa` 计算到 gear 0；可能改变 gear 0 对应的电流映射 | 受 `sys.deepsleep.allow.debug` 门控；当前属性为空，既往命令返回 `cmd not allow` | 立即 `setThermalControlTest 0` 并恢复正常热控 | 极高 | **禁止纳入正式功能**。仅可在隔离实验、持续监控温度时考虑 |
+| OplusBatteryService `setAmbientTemperature N` | 伪造场景环境温度并触发热策略重算 | 系统实际环境温度 | 可绕过环境温度对热档的影响 | 同一 debug 门控，当前不可达 | 取消测试源并等待真实传感器重算；无统一恢复 setter | 极高 | **测试注入，当前阻塞，排除** |
+| OplusBatteryService `setTsensorSource N` | 切换/伪造测试温度传感器来源 | 系统实际传感器源 | 可间接改变热档和充电策略 | 同一 debug 门控，当前不可达 | 必须先保存真实源值，再切回；当前无法建立可靠恢复 | 极高 | **测试注入，当前阻塞，排除** |
+| ConfigFS `plc` | `switch=0/1&#124;callname=...` 控制 PLC 通信使能；`buck=...` 投强制 buck 票 | 由适配器协议控制 | 属于协议通信与兼容路径，不直接增流 | ConfigFS shell 拒绝 | `switch=0`，并让协议状态机自然恢复 | 中 | **不是功率倍率，低优先级** |
+| ConfigFS `sec_ic_test` | 向次级充电 IC 下发测试命令并等待结果 | 无测试任务 | 可能直接操作次级 IC 寄存器，语义由测试命令决定 | ConfigFS shell 拒绝 | 无公开统一恢复；必须断电或等待 IC 自恢复 | 极高 | **禁止盲测** |
+| Charger HAL `setCV(cv_value, flag)` | V12 事务 132，设置恒压相关参数；当前源码摘要没有实现语义和范围校验 | 未知 | 理论上可改变充电电压终点或 CV 行为 | HAL 直连此前权限拒绝/DeadObject；未找到电池服务公开调用面 | 未知；必须先获得实现源码和设备原值 | 极高 | **阻塞，不盲测** |
+| Charger HAL `setChargerControl(data)` | V12 事务 81，直接下发充电控制字符串 | 未知 | 可能含模式、路径或硬件控制命令 | 同上 | 未知 | 极高 | **阻塞，不盲测** |
+| Charger HAL `setBobStatus(data)` | V12 事务 118，BOB 状态设置；接口存在但电池应用未找到公开调用构造 | 未知 | 可能影响供电路径，不能确认会影响充电电流 | 同上 | 未知 | 极高 | **语义不足，排除到取得实现源码后** |
+| Charger HAL `setChargerFactoryModeTest(data)` | V12 事务 85，工厂模式充电测试 | 未知 | 测试模式可能绕开正常策略 | 同上 | 未知 | 极高 | **禁止纳入正式功能** |
+| GuardElf / HAL `setTbattPwrOff` | 热电池电源关闭/保护路径 | 未知 | 方向是保护关断，不是升功率 | GuardElf shell 权限拒绝 | 恢复原状态；当前无法审计 | 极高 | **排除** |
+| GuardElf / HAL `setPsyMmiChgEn` | MMI 充电使能/禁止 | 系统当前状态 | 只能开关，无法设定功率上限 | 无显式权限校验，事务 14 可调用 | 恢复为 `1` | 中 | **已实测无效**：只造成一次短暂约 20 W 重协商，随后回落；不再测试或接入 |
+| GuardElf / HAL `setChargingModeInGsmCall` | 电话场景充电模式 | 系统当前模式 | 通常是降流或兼容门控 | GuardElf shell 权限拒绝 | 恢复原模式 | 中 | **只可能限制功率，排除** |
+| `setReserveSocDebug` | 调试保留 SOC/显示值 | 当前调度值 | 只影响 SOC 展示与保留区间 | GuardElf 权限边界 | 清除调试值 | 中 | **不是充电电流入口** |
+| `setChargerCycle` / `setChgOlcConfig` / `setChgRusConfig` / `setChgConfig` | 充电周期、OLC、RUS、通用配置命令 | 未知 | 可能改变策略或硬件配置，但缺乏字段级语义 | GuardElf shell 权限拒绝，GuardElf 事务 34–44 已出现 `READ_COMMON` 或 `POWER` 拒绝 | 未知 | 极高 | **权限及语义阻塞，不盲测** |
+
+### 12.2 第三轮结论
+
+1. 第三轮没有发现新的、可由普通应用直接写入且能越过其他安全票的“大功率 setter”。
+2. `bcc_current` 和 `CURRENT_NOW` 都进入 `VOTE_MIN` 链，只能清除残留上限或索取更低电流，不能把系统当前安全上限抬高。
+3. `slow_chg_en` 的源码公式已还原：启用时先按 watt 换算，再用 `pct` 限制曲线电流，并保底 `SLOW_CHG_MIN_CURR`；当前调试链的 `240,33` 仍属于约 33W 的慢充限制，`status=0` 才撤销该票。
+4. `CHARGE_CONTROL_LIMIT`、`normal_current_now`、`normal_cool_down`、`fast_chg_type` 和四类 power 镜像字段都不能直接提高充电功率，不再围绕这些字段重复实验。
+5. `supplementary_power_mos` 属于电池均衡与异常保护路径，没有安全的应用写入面；`setCV`、`setChargerControl`、`setBobStatus` 等 HAL 入口在缺少实现语义时全部保持阻塞。
+6. 真正的可控大方向仍是已经验证的组合：目标 gear、`cosa_ctc_value`、原生 `set_charge level`、`SmartChgMode=0`，以及权限允许时释放残余慢充/降温票。
+
+### 12.3 下一次接电后的最小验证顺序
+
+只有获得可审计的系统代执行入口后才执行，且每次只改变一个变量：
+
+1. 先读 `slow_chg_en`；若启用，记录 `pct,watt,en`，写 `status=0`，确认功率与 `chargeVal` 是否变化。
+2. 再检查 `COOL_DOWN` 是否存在 `USER_VOTER` 残留；写 `0` 后确认其他冷却票是否仍存在。
+3. 只有确认设备树启用了 `smart_charging_screenoff` 后，才评估 `battery/current_now` 的 `HIDL_VOTER` 释放；不把写入大值当作升功率手段。
+4. `bcc_current` 只作为残余 BCC 限流检查项，写入前必须解决原值读回和异常恢复。
+5. 不把 `setThermalControlTest`、`setTempLevel`、`setAmbientTemperature`、`setTsensorSource` 集成进 OPPower；这些只保留为隔离源码研究结论。
+## 13. 第三轮发现中的实际可用项（2026-10-23）
+
+本节只统计第 12 节新发现的参数。前几轮已经交付并接入的参数不重复计入本节。
+
+### 13.1 筛选结果
+
+| 项目 | 数量 | 结论 |
+| --- | ---: | --- |
+| 第三轮新增参数/入口 | 23 | 均已完成源码或权限筛选 |
+| 当前设备可直接用于正式控制 | 0 | 没有新增的正式可用入口 |
+| 当前只能释放残留限流、但无法访问 | 3 | `bcc_current`、`CURRENT_NOW`、`slow_chg_en` / `COOL_DOWN` 相关限流票 |
+| 有接口但不可用或不应使用 | 20 | 权限拒绝、debug 门控、无实际作用、测试注入或字段语义不足 |
+
+因此，第三次发现对 OPPower 当前正式控制逻辑的可交付结论是：**新增可实际使用的参数为 0 项，不增加新控制功能。**
+
+### 13.2 第三轮新增项的实际状态
+
+| 分组 | 第三轮参数 | 实际状态 |
+| --- | --- | --- |
+| 电流/慢充限流 | `bcc_current`、`current_now`、`slow_chg_en`、`cool_down` | shell/Shizuku 权限拒绝；即使可写也只是 `VOTE_MIN` 限流票，不能突破其他安全上限 |
+| 伪可写或仅统计 | `charge_control_limit`、`normal_current_now`、`normal_cool_down`、`chg_up_limit`、`fast_chg_type`、`bcc_parms` | 无实际升功率作用或仅污染/覆盖诊断读数 |
+| 内核内部路径 | `supplementary_power_mos` | 没有可供 OPPower 使用的安全公共写入面 |
+| 温度补偿/测试注入 | `bms_heat_temp_compensation`、`setThermalControlTest`、`setTempLevel`、`setAmbientTemperature`、`setTsensorSource` | 当前场景无效、debug 门控或会绕过真实温度保护，禁止接入 |
+| 协议/硬件测试 | `plc`、`sec_ic_test`、`setCV`、`setChargerControl`、`setBobStatus`、工厂模式、OLC/RUS/ChgConfig | 权限、字段语义或恢复机制不足，禁止盲测 |
+| 仅关闭或显示 | `setTbattPwrOff`、`setPsyMmiChgEn`、`setChargingModeInGsmCall`、`setReserveSocDebug` | 不属于提高功率的控制入口 |
+
+### 13.3 实测权限确认
+
+```text
+handleSlowCharge 0                     -> cmd not allow
+setPsySlowChgEnable                    -> READ_COMMON 权限拒绝
+setSmartCoolDown                       -> READ_COMMON 权限拒绝
+bcc_current / current_now              -> Permission denied
+slow_chg_en / cool_down                -> Permission denied
+setThermalControlTest / setTempLevel   -> debug 门控
+```
+
+本轮没有向 OPPower 增加任何第三次发现的新功能，也没有修改 APK 或正式源码。
+
+## 14. 第四轮控制面复核（2026-10-23）
+
+本轮继续检查 `BatteryServiceExtImpl$GuardElfThermalControl`、`OplusBatteryServiceFeature`、`ThermalControlUtils` 和充电 HAL 包装层，并在设备恢复无线 ADB 后完成一次插电实测。
+
+### 14.1 GuardElf 权限筛选
+
+`BatteryServiceExtImpl$GuardElfThermalControl` 的 50 个 Binder 方法中，与有线充电有关、增加了新控制可能性的无权限写入口如下：
+
+| 事务 | 方法 | 权限检查 | 当前状态 |
+| ---: | --- | --- | --- |
+| 20 | `setSmartChgMode` | 无 | 已接入 `SmartChgMode=0`，不重复统计 |
+| 24 | `setCustomSelectChgMode` | 无 | 0/1/2 已测无稳定独立增益，不重复统计 |
+| 14 | `setPsyMmiChgEn` | **无** | **已实测无效**：只短暂重协商约 20 W，随后回落 |
+| 1 | `setChargeLevel` | 包装层无权限检查，但要求调用 UID 为 1000 | shell/Shizuku 不能直接调用；当前通过系统热控广播下发 |
+
+`setPsySlowChgEnable`、`setSmartCoolDown`、`setReserveSocDebug`、`setSuperEnduranceStatus/Count`、`setChargerCycle`、`setChgOlcConfig` 等方法继续受 `com.oplus.permission.safe.READ_COMMON`；`setChgConfig`、`setChgRusConfig`、`setChargingModeInGsmCall` 和 `setTbattPwrOff` 继续受 `com.oplus.permission.safe.POWER`。因此本轮没有出现新的慢充、降温或 BCC 解限入口。
+
+### 14.2 `setPsyMmiChgEn` 的边界
+
+调用链为：
+
+```text
+service call guardelfthermalcontrol 14 s16 <0|1>
+→ BatteryServiceExtImpl$GuardElfThermalControl.setPsyMmiChgEn()
+→ OplusBatteryServiceFeature.setPsyMmiChgEn()
+→ vendor.oplus.hardware.charger.ICharger.setPsyMmiChgEn()
+```
+
+它控制底层 MMI 充电使能，语义是关闭或恢复充电使能，不是电流、瓦数或 BCC 上限 setter。可验证的用途是一次短时 `0 → 1` 软重插，让 PDO、VOOC/PPS 或残留限流重新协商；不能把 `1` 当作提高功率倍率，也不能让 `0` 常驻。
+
+实测环境为 RMX8899、ColorOS 17、SOC 66%、约 35.5°C、OPPower 前台、真实亮屏、AC 充电、基础热档 5、`cosa=0`、`chargeVal=4`。每次只改变这一项：
+
+```text
+基线：基础档 | cosa | 计算 gear | chargeVal | native level | V | A | W
+动作：service call guardelfthermalcontrol 14 s16 0
+观察：充电状态和电流是否归零
+恢复：立即 service call guardelfthermalcontrol 14 s16 1
+观察：30 秒稳定功率、快充类型、温度、gear
+```
+
+只有确认 `1` 已恢复、电流重新建立，并且功率持续高于同一 SOC/温度下的基线，才可记为有效；否则只保留为故障恢复手段。测试后必须回读 `dumpsys battery`，确认 AC/USB 已恢复且 `Charging state` 非 0；禁止把 `0` 留在设备上。
+
+### 14.2.1 实测结果
+
+用户外接功率计观察到：写入 `0 → 1` 后只出现一次短暂约 20 W 的重新协商，随后回落到原功率层。OPPower 界面稳定采样为：
+
+| 阶段 | 显示功率 | 电池电流 | 温度 | 状态 |
+| --- | ---: | ---: | ---: | --- |
+| 基线 | 10.5–10.6 W | 2517–2557 mA | 35.7°C | 充电中 |
+| `0 → 1` 后 | 10.4–10.6 W，随后 8.3 W | 2488–2541 mA，随后 2004 mA | 35.7°C | 充电中 |
+
+`setPsyMmiChgEn 0` 在 1 秒内没有改变 AC、PlugType、快充标志、`Charging state` 或电池电流，说明生产模式下它不会可靠地断开并重新协商底层充电；暂时出现的约 20 W 属于一次短时协商，不能跨过后续系统限流。最终已恢复到 `1`，AC 仍为 `true`、`PlugType=1`、`ChargeFastCharger=true`。
+
+### 14.3 本轮排除项
+
+- `oplus_battery_cool_charge` 只记录 `BatteryStatsManager` 的酷充事件，不进入充电环路或电流控制。
+- `setLongChargeProtectionTestMode`、`setLongChargeProtectionBatteryLevel` 和 `setLongChargeProtectionChargeWattage` 只写入 `x8.k` 的测试内存字段，用于覆盖智能充电判断，不直接写硬件电流。
+- `oplus_settings_hightemp_protect`、`oplus_settings_hightemp_safety_state`、`settings_thermal_high` 是高温流程状态位，不是提功率开关。
+- `smart_charge_switch_state` 控制智能充电调度；`smart_charge_protection_switch_state` 控制高电量后的长充保护。两者可能避免后续降速，但不提供更高的安全电流上限。
+- `setChargerControl`、`setCV`、`setBobStatus` 等 HAL 方法没有安全的应用侧包装面，继续禁止盲写。
+
+### 14.4 第四轮结论
+
+源码层面新增的 `setPsyMmiChgEn` 虽然可达，但实测不能稳定提高功率，只造成一次短暂约 20 W 重协商，随后回落。**第四轮新增的正式可用参数仍为 0 项**；该入口已排除，不接入 OPPower，也不再重复测试。
+
+## 15. 正常模式正 `speedChargeAdd` 实测（2026-10-23）
+
+测试环境与第 14 节相同：RMX8899 / ColorOS 17、OPPower 前台、真实亮屏、AC 充电、约 36°C、基础热档 5、`cosa=0`，当前策略为 `gearVal=5, chargeVal=4, speedChargeAdd=0`、`single_speed_charge_state=0`、`speed_charge_state=3`。
+
+| 阶段 | 界面功率 | 电池电流 | 结果 |
+| --- | ---: | ---: | --- |
+| 正常基线 | 10.5–10.6 W | 2517–2557 mA | 充电中 |
+| `set_charge(level=4, speedAdd=4, pkg=com.oppower)` | 10.2–10.5 W | 2448–2659 mA | 无持续提升，策略回读仍为 `speedChargeAdd=0` |
+| 恢复 `speedAdd=0` 后 | 11.0 W | 2623 mA | 属于继续充电后的自然变化，不能归因于写入 |
+
+广播均返回 `Broadcast completed: result=0`，恢复后 AC、`PlugType=1`、`ChargeFastCharger=true`、单速充电状态仍为 `0`。正常使用条件下，正 `speedChargeAdd` 没有形成可重复的额外功率；不启用 `single_speed_charge_state=1` 去专门触发该分支，因为此前已确认它会遮蔽档位回读并引入副作用。该项从待测候选改为排除。
+## 16. 高温、基础档与功率的悖论复核（2026-10-23）
+
+设备热控配置已从当前机器重新拉取到 `work/device_pull/sys_thermal_control_config-20261023.xml`，版本为 `2026082712`。复核源码和 XML 后，现有证据不支持“温度越高本身会提高充电功率”：温度升高会增加热控基础档，而基础档是限制项；命中同一最终 `gear` 时，温控 XML 给出的是同一行 `charge`（即运行时 `chargeVal`）。
+
+### 16.1 当前设备的策略映射
+
+同一份 XML 中，实际策略按“全局策略 → 应用/category/scene → complexscene”逐层覆盖。当前 OPPower 前台回读为 `common_config_float_window_scene_102`，命中 `float_window_scene_101-float_window_scene_102` 这一组：
+
+| gear | chargeVal | speedChargeAdd |
+| ---: | ---: | ---: |
+| 0 | 12 | 0 |
+| 1 | 9 | 0 |
+| 2 | 6 | 0 |
+| 3 | 6 | 0 |
+| 4 | 6 | 0 |
+| 5 | 4 | 0 |
+| 6 | 2 | 0 |
+| 7 | 2 | 0 |
+| 8 | 2 | 0 |
+
+没有 complexscene 覆盖、最终回落到 `globalPolicy` 时，映射又不同：
+
+| gear | chargeVal | speedChargeAdd |
+| ---: | ---: | ---: |
+| 0 | 0 | 未设置 |
+| 1 | 0 | 未设置 |
+| 2 | 7 | 0 |
+| 3 | 7 | 1 |
+| 4 | 7 | 2 |
+| 5 | 5 | 4 |
+| 6 | 3 | 4 |
+| 7 及以上 | 2 | 4 或更高 |
+
+这解释了为什么“同是 gear 0 或 chargeVal 0”却可能相差很多：`chargeVal` 是策略行结果，功率还取决于当前应用/category/complexscene、充电协议和 SOC 阶段。
+
+### 16.2 温度、基础档与 cosa 的真实关系
+
+`ThermalControllerCenter.i1()` 先取系统基础温度档，再加入位置、环境、场景等修正，最后叠加 `cosa_ctc_value`：
+
+```text
+最终 gear = 热控基础档 + 场景/其他修正 + cosa_ctc_value
+```
+
+如果目标 gear 固定为 0，基础档从 5 升到 8 时，OPPower 会把 `cosa` 从 `-5` 重算成 `-8`。最终仍是 gear 0，应读取同一策略行。因此：
+
+- 基础档升高本身不是“增加功率”的控制量，反而代表系统在升温时提高保护级别。
+- `cosa` 只是把最终 gear 拉回目标值，不能改变同一 gear 行的 `chargeVal`。
+- 高温样本中短暂变高的功率不能归因于高温，必须检查同时发生的 `set_charge(0)`、策略组变化、SOC/电压阶段、适配器重新协商或缓存错误。
+
+### 16.3 下午 30–40 W 连续段的重新判定
+
+原始采样文件位于 `OPPower/.codex-inspect/`。下午高功率段不是几秒钟的波动，表格中有连续多段：
+
+| 时间 | SOC | 电池温度 | 基础档 | 计算 gear | 服务端策略 | 电池侧功率 |
+| --- | ---: | ---: | ---: | ---: | --- | ---: |
+| 15:33:21–15:33:25 | 43% | 37.2°C | 5 | 5，`cosa=0` | policy gear 3，`chargeVal=0`，`speedChargeAdd=-2` | 32.38 W |
+| 15:33:31–15:34:01 | 43–44% | 37.1–37.2°C | 5 | 0，`cosa=-5` | 缓存仍先为 gear 3，随后读取不到 | 31.76–38.72 W |
+| 15:36:29–15:36:34 | 47% | 36.99°C | 5 | -1，`cosa=-6` | 读取不到 | 40.02 W |
+| 15:40:01–15:40:35 | 54–55% | 39.7–39.9°C | 7 | 1，`cosa=-6` | policy gear 1，`chargeVal=0`，`speedChargeAdd=-2` | 38.07–38.85 W |
+| 15:41:59–15:42:28 | 58–59% | 40.7–41.0°C | 8 | 2，`cosa=-6` | policy gear 1，`chargeVal=0`，`speedChargeAdd=-2` | 38.97–39.45 W |
+| 15:49:26–15:50:09 | 68–70% | 40.7–40.9°C | 7 | 0，`cosa=-7` | 读取不到 | 34.53–35.83 W |
+
+这推翻了“只是临时重协商”的解释。高功率期间至少持续了数十秒到两分钟，而且外接功率计也观察到 30 W 以上。
+
+因果关系也不是温度：
+
+- 15:33:14–15:33:19 时 SOC 42%、电池 37.2°C，功率约 15.58 W。
+- 15:33:16 活动策略从 `chargeVal=6, speedChargeAdd=1` 切到 `chargeVal=0, speedChargeAdd=-2`。
+- 15:33:21 功率升到 32.38 W，温度、基础档和 `cosa` 都没有变化。
+- 15:33:31 随后才写入 `cosa=-5`；功率没有再次跳变，仍保持 32.38 W。
+
+因此最有力的关联变量是 `chargeVal=0, speedChargeAdd=-2`，也就是最终进入原生 cooldown 0 的状态。温度、基础档和 `cosa` 只是当时同时存在的观察值。
+15:37:42 的原始系统日志直接给出了这一调用：
+
+```text
+tempLevel=[6]
+full=[com.android.launcher]
+tempGear=[1], configItemName=common_config
+chargeVal:0, speedChargeAdd:-2
+set cooldown:0, normalCoolDown:0
+```
+
+这不是推断：此时前台就是桌面，系统实际下发了 cooldown 0。
+
+`chargeVal=0` 经源码进入：
+
+```text
+ThermalControllerCenter.B2()
+→ policy.charge
+→ ThermalControlUtils.D1(chargeLevel, speedChargeAdd, foregroundPkg)
+→ D1(0, -2, pkg)
+→ setSmartCoolDown(0, 0, pkg)
+```
+
+`m2()` 的约 5 秒重算只有在重算结果仍为 `chargeVal=0` 时才会保持高功率；如果重算回到当前 OPPower/float-window 分组的 `gear 0 → chargeVal=12`，才会重新施加 cooldown。高功率不是系统“因为热而抬高”，而是充电 cooldown 被留在 0。
+
+这组记录还证明：`getCurThermalPolicy.gearVal` 与 OPPower 按 `基础档 + cosa` 计算的 gear 多次不一致。第一次高功率出现时，服务端仍是 gear 3，`cosa=0`；不能拿服务端缓存的 gear 证明实际档位，也不能把 OPPower 算出的 gear 0 当成已经获得 cooldown 0。
+
+`SmartChgMode=0` 和再次发送 `set_charge(level=0)` 在高功率已经建立后都没有产生额外增益；说明当时硬件已经是 level/cooldown 0。之后发送 `setChargingLevel 2` 才把功率从约 36.9 W 降到约 6 W，进一步证明真正控制硬件的是原生充电 level，而不是显示出来的齿轮。
+
+### 16.3.1 当前仍未解释的部分
+
+15:33 的高功率是在 `cosa=0` 时由活动策略变成 `chargeVal=0` 触发；当时的直接触发源仍需结合前台应用变化确认。历史日志同时记录了 `top=com.android.launcher.Launcher`，因此很可能与桌面包名触发的策略组切换有关。15:36 写入 `customize_charge_switch_state=1` 后也进入了一直锁存到约 15:50 的高功率段，但期间 `chargeVal` 多次读不到，暂不能把 `customize`、包名切换或热控刷新中的某一项单独认定为根因。
+
+下一步必须在同一前台应用、同一 SOC/温度下，分别固定和改变：
+
+1. 前台包名/category；
+2. `chargeVal` 是否等于 0；
+3. 原生 `setChargingLevel` 是否为 0。
+
+只有这三项拆开后，才能判断怎样稳定进入并维持 30 W+。
+### 16.4 当前实机只读基线
+
+2026-10-23 23:25–23:30，ADB `192.168.10.7:44901`：
+
+| 阶段 | SOC | 温度 | 基础档 | 策略 | 电流/电流上限 |
+| --- | ---: | ---: | ---: | --- | --- |
+| 插电、OPPower 后台/酷安前台 | 71% | 约 37.5°C | 5 | gear 5，chargeVal 4 | 约 2.25 A；`Max charging current=2,000,000` |
+| 随后拉回 OPPower 前台上报状态 | 72% | 约 37.9°C | 6 | gear 6，chargeVal 2 | AC 已拔出，不能用于功率 A/B |
+
+`Max charging current` 只能作为 Android 观测字段，当前在插电样本中与电池电流不严格相等，不能据此直接认定存在可由应用解除的 2 A setter。
+
+### 16.5 下一项必须验证的假设
+
+接电后固定同一前台应用、SOC 和温度，按以下顺序验证：
+
+1. 在 OPPower 前台保持计算 gear 0，读取当前 `chargeVal` 和电池电压/电流。
+2. 如果当前不是高功率，执行一次 `setChargingLevel 0`，连续记录至少 30 秒，确认是否能从当前低功率层进入 30 W+。
+3. 若高功率只能在 `chargeVal=0` 时成立，比较同一 SOC/温度下 OPPower 前台与桌面/普通应用前台，确认是策略 category 还是原生 level 导致差异。
+4. 只在不切换应用的情况下测试热控重算后的状态保持，不能把升温当作升功率手段。
+
+在上述 A/B 完成前，不把高温、基础档升高或 `Max charging current=2,000,000` 中的任何一项宣称为新的稳定增益入口；已有数据支持的候选是原生 cooldown/charge level 0。
+
+## 17. `chargeVal=0, speedChargeAdd=-2` 门控实现（2026-10-24）
+
+### 17.1 触发链复核
+
+用户指出的对照条件是正确的：下午低功率到高功率跃迁时，热控策略从 `chargeVal=6, speedChargeAdd=1` 切为 `chargeVal=0, speedChargeAdd=-2`，最终调用 `ThermalControlUtils.D1(0, -2, pkg)`。之前单独比较 `SmartChgMode 0/1` 没有复现该变量，只是排除了 `SmartChgMode` 的独立贡献。
+
+源码确认 `set_charge` 广播会把 `level` 和 `speedChargeAdd` 同时传入 `D1()`。正常模式下 `D1(0, -2)` 最终以 cooldown 0 调用 `setSmartCoolDown(0, 0, pkg)`。`getCurThermalPolicy.chargeVal` 仍是系统策略行的只读诊断值；应用直接下发 `set_charge` 后不伪造也不强写这个回读值。
+
+### 17.2 复杂场景阻断
+
+2026-10-24 00:09 的热控日志显示：`float={com.tencent.mm}`、`full={com.android.launcher}`，即使桌面全屏，也叠加了 `com.android.launcher_float_window_scene_102`。该行的 gear 0 映射为 `chargeVal=12, speedChargeAdd=0`，会覆盖普通 `common_config` 的 `chargeVal=0` 结果。
+
+先回桌面的单变量测试没有切换出普通 category，说明仅改变前台包名还不够；微信浮窗任务仍被热控计入 `float`。为保留用户微信状态，本轮没有关闭或移除微信任务 1712。后续真机复测必须记录热控日志中的 `float={...}` 和 `full={...}`，并在普通 `common_config` 与浮窗复杂场景分别采样，不能只比较功率。
+
+2026-10-24 01:08 又做了单项复核：把 `oplus_float_window_show` 从 `1` 改成 `0`，再通过 `oplus_camera_3rd_activity` 的等值别名 `0 → 00` 触发 `m2()`。微信进程和可见的 `TYPE_APPLICATION_OVERLAY` 窗口都保留。重算日志先出现 `float={com.tencent.mm}`、`com.android.launcher_float_window_scene_102`，随后为 `common_config_float_window_scene_102`；8 秒后 `getCurThermalPolicy` 仍返回 `categoryName: common_config_float_window_scene_102`。因此该开关不会关闭微信浮窗，也没有在当前 ColorOS 17 固件上立即把浮窗移出热控分类。测试后已恢复为 `1`。日志见 `.codex-inspect/float-show-0-refresh-20261024-010842-logcat.txt`。
+
+### 17.3 `chargeVal=--` 的版本与语义
+
+2026-10-23 15:49–15:50 和 15:57–15:58 出现 `chargeVal=--` 时，设备运行的是 beta8；beta9 到 20:01 才构建完成。原始 TSV 中同一时刻的 `policyGear`、`chargeVal`、`speedChargeAdd` 全部为空，界面把它们统一显示成 `--`。因此这次看到的是策略对象/字段读取失败，不是读取到了 `chargeVal=-2`。
+
+下午 32–40 W 的记录里，成功读到的是 `chargeVal=0, speedChargeAdd=-2`；另有 `policyGear=3`、基础档 5、`cosa=0`、计算档 5 的缓存不一致。可以确认 `-2` 属于 `speedChargeAdd`。`chargeVal=-2` 没有被下午的原始日志证实，不能据此建立映射。
+### 17.4 beta13 控制变更
+
+beta13 将目标 gear 与原生下达统一为：
+
+| 目标 gear | 原生 level | speedChargeAdd |
+| ---: | ---: | ---: |
+| 0 | 0 | -2 |
+| 1 | 0 | 0 |
+| 2–4 | 7 | 0 |
+| 5 | 5 | 0 |
+| 6 | 3 | 0 |
+| 7+ | 2 | 0 |
+
+- 目标首次进入或档位变化时立即下发。
+- 同一目标稳定时每 3 秒重新下发一次，覆盖系统约 5 秒一次的内部重算。
+- `cosa` 仍按 `目标 gear - Thermal Levels[0]` 每秒实时计算；变化时立即写入并触发一次系统重算。
+- 暂停、关闭总开关、拔电、SOC 暂停或充满时恢复 `cosa=0`、原生安全级 2、speed 0，并恢复会话前的 `SmartChgMode`。
+- beta12 实测发现：`set_charge` 广播返回 `Broadcast completed: result=0`，但 Battery 服务没有出现对应的 `setSmartCoolDown`，说明 shell 身份并没有实际调用到 `D1()`。beta13 改为受限的 `dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel N`；日志已确认 `level=0` 会调用 `setSmartCoolDown(0,0)` 并到达 Charger HAL。
+- Shizuku 白名单只允许 `setChargingLevel 0/2/3/5/7`，不再允许 `set_charge` 广播。
+
+### 17.5 真机验收结果
+
+2026-10-24 00:57 已在 RMX8899 上完成接电验收。微信进程 `14364 14618` 和可见的 `TYPE_APPLICATION_OVERLAY` 浮窗始终保留；`oplus_float_window_show=1`，没有强制停止或移除微信任务。
+
+- OPPower 保持前台，电量 88%，电池温度 38.5–38.6°C。
+- UI 显示基础档 6、`cosa=-6`、计算档 0、policy `chargeVal=12`、原生充电级 0、`speedAdd=-2`。
+- 25 秒日志中共出现 8 次 `setChargingLevel 0`，每次都到达 `setSmartCoolDown: coolDown = 0` 和 HAL `set cooldown:0`；本段没有非零 cooldown 写回。
+- 同期功率约 11.10–11.53 W，没有因连续下发而提升。
+- 结论：连续下发确实有效到达 HAL，但在“微信浮窗 + 高 SOC + 当前 10 W 协商状态”下不足以提高功率。它不能单独解决 `float_window_scene_102` 的 `chargeVal=12` 映射。
+- 下一步需要在同样保留浮窗的前提下，于较低 SOC 复测，或寻找比 `setChargingLevel` 更高层且能改变 `speed_charge_state`/HAL 协商的门控。重复增加下发频率没有证据支持。
+
+### 17.6 beta14 发热与调用收敛
+
+beta14 回退 beta13 的稳定期连续 native 下发，避免每 3 秒唤醒 BatteryService 和 Charger HAL：
+
+- beta8 本身没有主动调用 `setChargingLevel`；下午 32–40 W 的 `chargeVal=0, speedChargeAdd=-2` 是热控 `m2()` 自行生成的策略。
+- beta14 只在首次进入目标，或原生 level / speedAdd 映射发生变化时调用一次 `setChargingLevel`。
+- 同一目标、同一基础档且无需修正 `cosa` 时，不再重复执行 native 命令。
+- `SmartChgMode` 在一个充电会话内只读取、设置并确认一次；稳定期不再每秒回读。
+- 页面指标仍按 1 秒刷新，控制循环仍每秒读取基础档和 `cosa`，以保持及时计算；曲线继续按 LLPower 的 3/5/180 秒节奏采样。
+- 这些调整用于避免应用进程额外制造持续 Binder、shell 和 HAL 调用；不以高频轮询或升温换功率。

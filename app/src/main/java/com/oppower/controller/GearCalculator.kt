@@ -40,6 +40,15 @@ object GearCalculator {
         else -> SAFE_NATIVE_CHARGE_LEVEL
     }
 
+    /**
+     * ColorOS uses the invalid-speed sentinel -2 together with charge level 0
+     * when its ordinary policy reaches the unrestricted cooldown row. Level 0
+     * reaches the same setSmartCoolDown(0, 0) branch; the sentinel documents the
+     * policy state OPPower is trying to reproduce.
+     */
+    fun nativeSpeedChargeAddForGear(targetGear: Int): Int =
+        if (targetGear <= 0) -2 else 0
+
     fun parseThermalStatus(raw: String): ThermalStatus {
         val levels = Regex("Thermal Levels = \\[([^]]*)]")
             .find(raw)

@@ -61,7 +61,7 @@ internal object AllowedCommands {
     private val setSmartChgMode =
         Regex("service call guardelfthermalcontrol 20 s16 (?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])")
     private val setNativeChargeLevel = Regex(
-        """am broadcast -a oplus\.intent\.action\.ACTION_THERMAL_CONTROL_USER_SYSTEM -p com\.oplus\.battery --es name set_charge --ei level (?:0|2|3|5|7) --ei speedChargeAdd 0 --es foregroundPkgName com\.oppower""",
+        """dumpsys activity service com\.oplus\.battery/\.OplusBatteryService setChargingLevel (?:0|2|3|5|7)""",
     )
     fun matches(command: String): Boolean =
         command in exact ||

@@ -1,0 +1,22 @@
+OPPower 1.0.0-beta14
+versionCode=14
+built=2026-10-24 Asia/Shanghai
+apk=OPPower-1.0.0-beta14-debug.apk
+sha256=7FE3097BB8768AAFE4D2476E0C997FD2699F09E5B16115D7F53EE5E1A5858476
+
+Changes:
+- Stable targets no longer repeat setChargingLevel every 3 seconds.
+- Native level and speedAdd are applied once on target entry or mapping change.
+- SmartChgMode is read, set, and confirmed once per charging session.
+- cos_a remains monitored every second and is recalculated immediately when the thermal base changes.
+- Curve sampling remains at LLPower cadence.
+
+Validation:
+- 38 unit tests passed.
+- lintDebug passed.
+- assembleDebug passed.
+- APK metadata: versionCode 14, versionName 1.0.0-beta14.
+- Installed on RMX8899 with WeChat processes and floating overlay preserved.
+- On-device stable-period call-count check is pending because the device was unplugged and the master switch was off after installation.
+- Stable-period no-repeat behavior is covered by unit tests.
+

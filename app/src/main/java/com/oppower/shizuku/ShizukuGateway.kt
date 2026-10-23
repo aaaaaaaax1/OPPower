@@ -145,13 +145,18 @@ class ShizukuGateway(context: Context) : ChargingGateway {
     }
 
     override fun requestNativeChargeLevel(level: Int, speedAdd: Int): Boolean {
-        if (speedAdd != 0 || level !in NATIVE_CHARGE_LEVELS) return false
+        if (level !in NATIVE_CHARGE_LEVELS) return false
+        if (speedAdd != 0 && !(level == 0 && speedAdd == -2)) return false
+        // The implicit set_charge broadcast is accepted by ActivityManager but does
+        // not reach D1() for Shizuku's shell identity on ColorOS 17. The service's
+        // debug command executes D1(level, 0, "test") inside BatteryService and is
+        // confirmed to reach Charger HAL. In normal mode D1(0, -2) also resolves to
+        // setSmartCoolDown(0, 0), so this is the verified downstream path for gear 0.
         val output = execute(
-            "am broadcast -a oplus.intent.action.ACTION_THERMAL_CONTROL_USER_SYSTEM " +
-                "-p com.oplus.battery --es name set_charge --ei level $level " +
-                "--ei speedChargeAdd 0 --es foregroundPkgName com.oppower",
+            "dumpsys activity service com.oplus.battery/.OplusBatteryService " +
+                "setChargingLevel $level",
         )
-        return output.contains("Broadcast completed: result=0")
+        return output.contains("set charging level = $level")
     }
 
     override fun readSmartChgMode(): Int? {

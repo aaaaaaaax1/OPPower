@@ -58,6 +58,9 @@ class GearCalculatorTest {
         assertEquals(5, GearCalculator.nativeChargeLevelForGear(5))
         assertEquals(3, GearCalculator.nativeChargeLevelForGear(6))
         assertEquals(2, GearCalculator.nativeChargeLevelForGear(7))
+        assertEquals(-2, GearCalculator.nativeSpeedChargeAddForGear(0))
+        assertEquals(0, GearCalculator.nativeSpeedChargeAddForGear(1))
+        assertEquals(0, GearCalculator.nativeSpeedChargeAddForGear(7))
     }
 
 }

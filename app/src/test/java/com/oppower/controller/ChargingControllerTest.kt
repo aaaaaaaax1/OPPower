@@ -26,6 +26,7 @@ class ChargingControllerTest {
         assertTrue(first.verified)
         assertEquals(listOf(-8), gateway.writes)
         assertEquals(listOf(0), gateway.nativeChargeLevels)
+        assertEquals(listOf(-2), gateway.nativeSpeedChargeAdds)
         assertEquals(0, gateway.smartMode)
         assertEquals(listOf(0), gateway.smartModeWrites)
         assertEquals(1, gateway.refreshRequests)
@@ -221,6 +222,33 @@ class ChargingControllerTest {
         assertEquals(listOf(0, 1), gateway.smartModeWrites)
     }
 
+    @Test
+    fun smartModeIsConfirmedOnlyOncePerChargingSession() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 8)
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+
+        assertEquals(3, gateway.smartModeReads)
+        assertEquals(listOf(0), gateway.smartModeWrites)
+    }
+
+    @Test
+    fun nativeZeroLevelIsNotReappliedWhileTargetIsStable() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 8)
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+
+        assertEquals(listOf(0), gateway.nativeChargeLevels)
+        assertEquals(listOf(-2), gateway.nativeSpeedChargeAdds)
+    }
+
     private fun settings(baseTier: BaseTier) = RuntimeSettings(
         masterEnabled = true,
         baseTier = baseTier,
@@ -245,7 +273,9 @@ class ChargingControllerTest {
         override val hasPermission = true
         val writes = mutableListOf<Int>()
         val nativeChargeLevels = mutableListOf<Int>()
+        val nativeSpeedChargeAdds = mutableListOf<Int>()
         val smartModeWrites = mutableListOf<Int>()
+        var smartModeReads = 0
         var refreshRequests = 0
 
         override fun readGlobal(name: String): String {
@@ -273,12 +303,15 @@ class ChargingControllerTest {
         }
 
         override fun requestNativeChargeLevel(level: Int, speedAdd: Int): Boolean {
-            assertEquals(0, speedAdd)
             nativeChargeLevels += level
+            nativeSpeedChargeAdds += speedAdd
             return nativeRefreshSucceeds
         }
 
-        override fun readSmartChgMode(): Int = smartMode
+        override fun readSmartChgMode(): Int {
+            smartModeReads++
+            return smartMode
+        }
 
         override fun setSmartChgMode(value: Int): Boolean {
             smartModeWrites += value
