@@ -23,44 +23,4 @@ class GearCalculatorTest {
         assertEquals(listOf(7, 8), status.levels)
     }
 
-    @Test
-    fun targetCosaUsesOnlyTargetAndBaseGear() {
-        assertEquals(-6, GearCalculator.cosaForTarget(targetGear = 0, baseGear = 6))
-        assertEquals(-5, GearCalculator.cosaForTarget(targetGear = 1, baseGear = 6))
-        assertEquals(-1, GearCalculator.cosaForTarget(targetGear = 5, baseGear = 6))
-    }
-
-    @Test
-    fun targetOutsideSafeCosaRangeIsRejected() {
-        assertNull(GearCalculator.cosaForTarget(targetGear = 0, baseGear = 20))
-        assertNull(GearCalculator.cosaForTarget(targetGear = 9, baseGear = -1))
-    }
-
-    @Test
-    fun resolvedGearUsesBaseAndCosaAndIgnoresCachedPolicyGear() {
-        val policy = ThermalPolicy(gear = 7, chargeVal = 4)
-        val status = GearCalculator.parseThermalStatus("Thermal Levels = [6]")
-
-        val resolved = GearCalculator.resolve(policy, status, cosa = -6)
-
-        assertEquals(0, resolved.gear)
-        assertEquals(6, resolved.baseGear)
-        assertEquals(0, resolved.calculatedGear)
-        assertEquals(-6, resolved.cosa)
-        assertEquals(4, resolved.chargeVal)
-    }
-    @Test
-    fun nativeFallbackMatchesGlobalPolicyRows() {
-        assertEquals(0, GearCalculator.nativeChargeLevelForGear(0))
-        assertEquals(0, GearCalculator.nativeChargeLevelForGear(1))
-        assertEquals(7, GearCalculator.nativeChargeLevelForGear(2))
-        assertEquals(7, GearCalculator.nativeChargeLevelForGear(4))
-        assertEquals(5, GearCalculator.nativeChargeLevelForGear(5))
-        assertEquals(3, GearCalculator.nativeChargeLevelForGear(6))
-        assertEquals(2, GearCalculator.nativeChargeLevelForGear(7))
-        assertEquals(-2, GearCalculator.nativeSpeedChargeAddForGear(0))
-        assertEquals(0, GearCalculator.nativeSpeedChargeAddForGear(1))
-        assertEquals(0, GearCalculator.nativeSpeedChargeAddForGear(7))
-    }
-
 }

@@ -51,22 +51,17 @@ internal object AllowedCommands {
     private val exact = setOf(
         "settings get global cosa_ctc_value",
         "settings get system oplus_camera_3rd_activity",
-        "service call guardelfthermalcontrol 19",
+        "settings get system oplus_float_window_show",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus",
     )
     private val putCosa = Regex("settings put global cosa_ctc_value -?\\d{1,3}")
-    private val putCameraActivityAlias =
-        Regex("settings put system oplus_camera_3rd_activity (?:0|1|00|01)")
-    private val setSmartChgMode =
-        Regex("service call guardelfthermalcontrol 20 s16 (?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])")
-    private val setNativeChargeLevel = Regex(
-        """dumpsys activity service com\.oplus\.battery/\.OplusBatteryService setChargingLevel (?:0|2|3|5|7)""",
+    private val putThermalRefreshAlias = Regex(
+        "settings put system (?:oplus_camera_3rd_activity|oplus_float_window_show) (?:0|1|00|01)",
     )
+
     fun matches(command: String): Boolean =
         command in exact ||
             putCosa.matches(command) ||
-            putCameraActivityAlias.matches(command) ||
-            setSmartChgMode.matches(command) ||
-            setNativeChargeLevel.matches(command)
+            putThermalRefreshAlias.matches(command)
 }

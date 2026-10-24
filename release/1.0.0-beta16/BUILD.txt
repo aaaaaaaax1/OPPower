@@ -1,0 +1,19 @@
+OPPower 1.0.0-beta16
+versionCode=16
+built=2026-10-24 Asia/Shanghai
+apk=OPPower-1.0.0-beta16-debug.apk
+sha256=A3C3294AC09B5D12C69229DC39EB543F0645990DCC21DD26025541C3D00C4911
+
+Changes:
+- Remove setChargingLevel from the controller, Shizuku gateway, AIDL gateway, and command allowlist.
+- Keep cosa_ctc_value plus one thermal refresh as the only charging control path.
+- Prevent the native cooldown write from racing ColorOS thermal recalculations that rewrite cooldown 12/15.
+- Remove native charge-level state, restoration, and UI text.
+- Document setChargingLevel as permanently forbidden to avoid future regressions.
+
+Validation:
+- 34 unit tests passed.
+- lintDebug passed with 0 errors and 19 warnings.
+- assembleDebug passed.
+- APK metadata: versionCode 16, versionName 1.0.0-beta16.
+- Device-side 0 W oscillation verification is pending installation and an AC charging run.

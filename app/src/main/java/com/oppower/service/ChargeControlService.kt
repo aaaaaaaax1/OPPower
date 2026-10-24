@@ -33,6 +33,7 @@ import com.oppower.model.RuntimeSettings
 import com.oppower.model.powerTierLabel
 import com.oppower.shizuku.ShizukuGateway
 import com.oppower.ui.oneDecimal
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,32 +110,46 @@ class ChargeControlService : Service() {
             try {
                 while (true) {
                     val cycleStartedAt = SystemClock.elapsedRealtime()
-                    val settings = cachedSettings
-                    val battery = batteryReader.snapshot(settings)
-                    // evaluate() also performs the safe cosa=0 restoration when
-                    // the master switch is off. Keeping that path in the normal
-                    // cycle prevents a disabled switch from leaving an old
-                    // offset active after a settings change.
-                    val status = controller.evaluate(settings, battery)
-                    ChargeControlBus.status.value = status
-                    if (lastOverlayEnabled != settings.overlayKeepAliveEnabled) {
-                        lastOverlayEnabled = settings.overlayKeepAliveEnabled
-                        overlayScope.launch { overlay.sync(settings.overlayKeepAliveEnabled) }
+                    var keepRunning = true
+                    try {
+                        val settings = cachedSettings
+                        val battery = batteryReader.snapshot(settings)
+                        // evaluate() also performs the safe cosa=0 restoration when
+                        // the master switch is off. Keeping that path in the normal
+                        // cycle prevents a disabled switch from leaving an old
+                        // offset active after a settings change.
+                        val status = controller.evaluate(settings, battery)
+                        ChargeControlBus.status.value = status
+                        if (lastOverlayEnabled != settings.overlayKeepAliveEnabled) {
+                            lastOverlayEnabled = settings.overlayKeepAliveEnabled
+                            overlayScope.launch { overlay.sync(settings.overlayKeepAliveEnabled) }
+                        }
+                        syncStatusNotification(status, battery, settings)
+                        if (settings.historyEnabled) {
+                            runCatching {
+                                historyStore.record(battery, screenOn = screenOn)
+                                    ?.let(ChartHistoryBus::append)
+                            }.onFailure {
+                                android.util.Log.w("OPPower", "History sample failed", it)
+                            }
+                        }
+                        if (!battery.acOnline) {
+                            if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                            keepRunning = false
+                        } else if (!settings.masterEnabled && !settings.liveNotificationEnabled) {
+                            if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                            keepRunning = false
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        // Keep the control loop alive after a transient Shizuku,
+                        // battery or notification failure. The next cycle retries.
+                        android.util.Log.w("OPPower", "Charge control cycle failed", error)
                     }
-                    syncStatusNotification(status, battery, settings)
-                    if (settings.historyEnabled) {
-                        historyStore.record(battery, screenOn = screenOn)?.let(ChartHistoryBus::append)
-                    }
-                    if (!battery.acOnline) {
-                        if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
-                        break
-                    }
-                    if (!settings.masterEnabled && !settings.liveNotificationEnabled) {
-                        if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
-                        break
-                    }
+                    if (!keepRunning) break
                     // The notification obeys its configured cadence. Chart history is
                     // throttled by ChartHistoryStore to LLPower's sampling intervals.
                     val remaining = (CONTROL_CYCLE_MILLIS -

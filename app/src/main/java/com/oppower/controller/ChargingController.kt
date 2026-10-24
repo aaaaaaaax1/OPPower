@@ -20,16 +20,6 @@ interface ChargingGateway {
     fun readThermalPolicy(): String
     fun readThermalStatus(): String
     fun requestThermalPolicyRefresh(): Boolean
-
-    /**
-     * Calls the ColorOS BatteryService debug path that reaches D1(). This remains
-     * available when getCurThermalPolicy is null because OPPower has no
-     * package-specific thermal policy.
-     */
-    fun requestNativeChargeLevel(level: Int, speedAdd: Int = 0): Boolean = false
-
-    fun readSmartChgMode(): Int? = null
-    fun setSmartChgMode(value: Int): Boolean = false
 }
 
 class ChargingController(
@@ -44,17 +34,11 @@ class ChargingController(
     private var cosaInitialized = false
     private var lastAppliedGear: Int? = null
     private var lastObservedGear: Int? = null
-    private var lastNativeChargeLevel: Int? = null
-    private var lastNativeSpeedChargeAdd: Int? = null
-    private var lastPolicyCategory: String? = null
-    private var categoryRecoveryAttempts = 0
     private var appliedTier: ControlTier? = null
     private var temperatureCandidateGear: Int? = null
     private var temperatureCandidateSince = 0L
     private var controlSettingsSnapshot: ControlSettings? = null
     private var pausedFromGear: Int? = null
-    private var smartChgModeOriginal: Int? = null
-    private var smartChgModeEnsured = false
 
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
@@ -107,7 +91,6 @@ class ChargingController(
                 )
             }
 
-            val enhancementsReady = ensureSmartChgModeDisabled()
             val decision = rules.decide(
                 settings = settings,
                 temperatureC = battery.temperatureC,
@@ -116,6 +99,7 @@ class ChargingController(
                 sessionSocLocked = sessionSocLocked,
             )
             val requested = decision.targetGear
+
             if (requested == null) {
                 if (appliedTier == ControlTier.PAUSED && pausedFromGear != null) {
                     return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
@@ -156,11 +140,11 @@ class ChargingController(
                 return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
             }
 
-            val target = confirmGear(requested, settings, decision.tier)
+            val target = confirmGear(requested!!, settings, decision.tier)
             if (target == null) {
                 return ControllerStatus(
                     ControllerPhase.ACTIVE,
-                    "等待 ${if (requested > (lastAppliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
+                    "等待 ${if (requested!! > (lastAppliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
                     desiredGear = requested,
                     appliedCosa = currentCosa,
                     observedGear = lastObservedGear,
@@ -188,41 +172,10 @@ class ChargingController(
                         "，安全范围 ${GearCalculator.COSA_MIN}..${GearCalculator.COSA_MAX}",
                 )
 
-            val targetChanged = lastAppliedGear != null && lastAppliedGear != target
-            if (targetChanged) categoryRecoveryAttempts = 0
-            val needsApply = currentCosa != desiredCosa || lastAppliedGear != target
+            val targetChanged = lastAppliedGear != target
+            val needsApply = currentCosa != desiredCosa || targetChanged
             val wrote = if (needsApply && currentCosa != desiredCosa) writeCosa(desiredCosa) else false
             val refreshRequested = if (needsApply) requestThermalRefresh() else false
-            val nativeLevel = GearCalculator.nativeChargeLevelForGear(target)
-            val nativeSpeedAdd = GearCalculator.nativeSpeedChargeAddForGear(target)
-            val nativeMappingChanged = lastNativeChargeLevel != nativeLevel ||
-                lastNativeSpeedChargeAdd != nativeSpeedAdd
-            val nativeGateAlreadyUnrestricted = target == 0 &&
-                policy.chargeVal == 0 &&
-                policy.speedChargeAdd == -2
-            val policyCategory = policy.category.takeIf { it.isNotBlank() }
-            val categoryChanged = target == 0 &&
-                lastPolicyCategory != null &&
-                policyCategory != null &&
-                policyCategory != lastPolicyCategory
-            val categoryGateIsRestrictive = policy.chargeVal != null && policy.chargeVal != 0
-            val categoryRecoveryNeeded = categoryChanged &&
-                categoryGateIsRestrictive &&
-                categoryRecoveryAttempts < MAX_CATEGORY_RECOVERY_ATTEMPTS
-            val nativeNeedsApply = (!nativeGateAlreadyUnrestricted && nativeMappingChanged) ||
-                categoryRecoveryNeeded
-            val nativeApplied = if (nativeNeedsApply) {
-                if (categoryRecoveryNeeded) categoryRecoveryAttempts += 1
-                // Record the attempt before invoking Shizuku. A transient failure
-                // must not turn into a one-second retry loop or extra heat.
-                lastNativeChargeLevel = nativeLevel
-                lastNativeSpeedChargeAdd = nativeSpeedAdd
-                runCatching { shizuku.requestNativeChargeLevel(nativeLevel, nativeSpeedAdd) }
-                    .getOrDefault(false)
-            } else {
-                false
-            }
-            policyCategory?.let { lastPolicyCategory = it }
             val calculatedGear = baseGear + currentCosa
             val verified = calculatedGear == target
 
@@ -251,14 +204,8 @@ class ChargingController(
                     append(currentCosa)
                     append(" · 目标=")
                     append(target)
+
                     chargeVal?.let { append(" · chargeVal=$it") }
-                    append(" · 原生充电级=")
-                    append(nativeLevel)
-                    append(" · speedAdd=")
-                    append(nativeSpeedAdd)
-                    if (categoryRecoveryNeeded) append(" · 场景变化，已单次复协商")
-                    if (nativeNeedsApply && !nativeApplied) append("（下发失败）")
-                    if (!enhancementsReady) append(" · 快充增强设置未完全生效")
                 },
                 desiredGear = target,
                 appliedCosa = currentCosa,
@@ -320,16 +267,13 @@ class ChargingController(
         lastFull = false
         lastAppliedGear = null
         lastObservedGear = null
-        lastNativeChargeLevel = null
-        lastNativeSpeedChargeAdd = null
-        lastPolicyCategory = null
-        categoryRecoveryAttempts = 0
+
         appliedTier = null
+
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
         controlSettingsSnapshot = null
         pausedFromGear = null
-        smartChgModeEnsured = false
     }
 
     private fun confirmGear(
@@ -399,41 +343,7 @@ class ChargingController(
     }
 
     private fun restoreBoth() {
-        restoreSmartChgMode()
-        val safeLevel = GearCalculator.SAFE_NATIVE_CHARGE_LEVEL
-        val nativeLevel = lastNativeChargeLevel
-        if (nativeLevel != null && nativeLevel != safeLevel) {
-            val restored = runCatching { shizuku.requestNativeChargeLevel(safeLevel, 0) }
-                .getOrDefault(false)
-            if (restored) lastNativeChargeLevel = safeLevel
-        }
         runCatching { restoreOffset() }
-    }
-
-    private fun ensureSmartChgModeDisabled(): Boolean {
-        if (smartChgModeEnsured) return true
-        if (smartChgModeOriginal == null) {
-            smartChgModeOriginal = runCatching { shizuku.readSmartChgMode() }.getOrNull() ?: return false
-        }
-        val current = runCatching { shizuku.readSmartChgMode() }.getOrNull() ?: return false
-        if (current == 0) {
-            smartChgModeEnsured = true
-            return true
-        }
-        val applied = runCatching {
-            shizuku.setSmartChgMode(0) && shizuku.readSmartChgMode() == 0
-        }.getOrDefault(false)
-        if (applied) smartChgModeEnsured = true
-        return applied
-    }
-
-    private fun restoreSmartChgMode() {
-        smartChgModeEnsured = false
-        val original = smartChgModeOriginal ?: return
-        val restored = runCatching {
-            shizuku.setSmartChgMode(original) && shizuku.readSmartChgMode() == original
-        }.getOrDefault(false)
-        if (restored) smartChgModeOriginal = null
     }
 
     private fun restoreOffset() {
@@ -442,11 +352,9 @@ class ChargingController(
         if (wrote) requestThermalRefresh()
         lastAppliedGear = null
         lastObservedGear = null
-        lastNativeChargeLevel = null
-        lastNativeSpeedChargeAdd = null
-        lastPolicyCategory = null
-        categoryRecoveryAttempts = 0
+
         appliedTier = null
+
         temperatureCandidateGear = null
         temperatureCandidateSince = 0L
         pausedFromGear = null
@@ -478,7 +386,6 @@ class ChargingController(
 
     private companion object {
         const val TEMPERATURE_PAUSE_CANDIDATE = -1
-        const val MAX_CATEGORY_RECOVERY_ATTEMPTS = 1
     }
 
     private data class ControlSettings(

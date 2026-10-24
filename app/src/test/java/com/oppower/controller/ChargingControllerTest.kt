@@ -25,14 +25,15 @@ class ChargingControllerTest {
         assertEquals(0, first.calculatedGear)
         assertTrue(first.verified)
         assertEquals(listOf(-8), gateway.writes)
-        assertEquals(listOf(0), gateway.nativeChargeLevels)
-        assertEquals(listOf(-2), gateway.nativeSpeedChargeAdds)
-        assertEquals(0, gateway.smartMode)
-        assertEquals(listOf(0), gateway.smartModeWrites)
+
+
+
+
         assertEquals(1, gateway.refreshRequests)
         assertEquals(0, second.observedGear)
         assertEquals(listOf(-8), gateway.writes)
-        assertEquals(listOf(0), gateway.nativeChargeLevels)
+
+
         assertEquals(1, gateway.refreshRequests)
     }
 
@@ -101,8 +102,32 @@ class ChargingControllerTest {
         assertEquals(2, status.calculatedGear)
         assertEquals(listOf(-6), gateway.writes)
         assertFalse(gateway.writes.contains(0))
-        assertEquals(listOf(0, 7), gateway.nativeChargeLevels)
+
+
         assertEquals(refreshBefore + 1, gateway.refreshRequests)
+    }
+
+
+    @Test
+    fun maxToGentleAndBackToMaxRestoresGearImmediately() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 8)
+        val controller = ChargingController(gateway)
+
+        controller.evaluate(settings(BaseTier.MAX_OUTPUT), battery())
+        gateway.writes.clear()
+        gateway.refreshRequests = 0
+
+        val gentle = controller.evaluate(settings(BaseTier.GENTLE), battery())
+        gateway.writes.clear()
+        gateway.refreshRequests = 0
+        val restored = controller.evaluate(settings(BaseTier.MAX_OUTPUT), battery())
+
+        assertEquals(2, gentle.desiredGear)
+        assertEquals(0, restored.desiredGear)
+        assertEquals(0, restored.calculatedGear)
+        assertEquals(listOf(-8), gateway.writes)
+        assertEquals(1, gateway.refreshRequests)
+        assertTrue(restored.verified)
     }
 
     @Test
@@ -159,7 +184,8 @@ class ChargingControllerTest {
         assertEquals(ControllerPhase.DISABLED, status.phase)
         assertEquals(0, gateway.cosa)
         assertEquals(listOf(0), gateway.writes)
-        assertEquals(listOf(0, 2), gateway.nativeChargeLevels)
+
+
     }
 
     @Test
@@ -206,7 +232,7 @@ class ChargingControllerTest {
     }
 
     @Test
-    fun disconnectRestoresSmartMode() {
+    fun disconnectRestoresCosaOnly() {
         val gateway = FakeChargingGateway(cosa = 0, gear = 8)
         val controller = ChargingController(gateway)
         val enabled = settings(BaseTier.MAX_OUTPUT)
@@ -218,12 +244,11 @@ class ChargingControllerTest {
         )
 
         assertEquals(ControllerPhase.WAITING_FOR_POWER, status.phase)
-        assertEquals(1, gateway.smartMode)
-        assertEquals(listOf(0, 1), gateway.smartModeWrites)
+        assertEquals(0, gateway.cosa)
     }
 
     @Test
-    fun nativeCallIsSkippedWhenPolicyAlreadyHasUnrestrictedGearZeroGate() {
+    fun gearZeroWritesCosaOnceWithoutUnverifiedBroadcast() {
         val gateway = FakeChargingGateway(
             cosa = 0,
             gear = 8,
@@ -239,74 +264,10 @@ class ChargingControllerTest {
 
         assertEquals(listOf(-8), gateway.writes)
         assertEquals(1, gateway.refreshRequests)
-        assertTrue(gateway.nativeChargeLevels.isEmpty())
     }
 
-    @Test
-    fun categoryChangeGetsAtMostOneRecoveryNegotiation() {
-        val gateway = FakeChargingGateway(cosa = 0, gear = 8, policyCategory = "float_scene")
-        val controller = ChargingController(gateway)
-        val enabled = settings(BaseTier.MAX_OUTPUT)
 
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-        assertEquals(listOf(0), gateway.nativeChargeLevels)
 
-        gateway.policyCategory = "restricted_scene"
-        controller.evaluate(enabled, battery())
-        assertEquals(listOf(0, 0), gateway.nativeChargeLevels)
-
-        gateway.policyCategory = "another_restricted_scene"
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-        assertEquals(listOf(0, 0), gateway.nativeChargeLevels)
-        assertEquals(listOf(-2, -2), gateway.nativeSpeedChargeAdds)
-    }
-
-    @Test
-    fun failedNativeCallIsNotRetriedWhileStable() {
-        val gateway = FakeChargingGateway(
-            cosa = 0,
-            gear = 8,
-            nativeRefreshSucceeds = false,
-        )
-        val controller = ChargingController(gateway)
-        val enabled = settings(BaseTier.MAX_OUTPUT)
-
-        val first = controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-
-        assertEquals(listOf(0), gateway.nativeChargeLevels)
-        assertTrue(first.message.contains("下发失败"))
-    }
-
-    @Test
-    fun smartModeIsConfirmedOnlyOncePerChargingSession() {
-        val gateway = FakeChargingGateway(cosa = 0, gear = 8)
-        val controller = ChargingController(gateway)
-        val enabled = settings(BaseTier.MAX_OUTPUT)
-
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-
-        assertEquals(3, gateway.smartModeReads)
-        assertEquals(listOf(0), gateway.smartModeWrites)
-    }
-
-    @Test
-    fun nativeZeroLevelIsNotReappliedWhileTargetIsStable() {
-        val gateway = FakeChargingGateway(cosa = 0, gear = 8)
-        val controller = ChargingController(gateway)
-        val enabled = settings(BaseTier.MAX_OUTPUT)
-
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-
-        assertEquals(listOf(0), gateway.nativeChargeLevels)
-        assertEquals(listOf(-2), gateway.nativeSpeedChargeAdds)
-    }
 
     private fun settings(baseTier: BaseTier) = RuntimeSettings(
         masterEnabled = true,
@@ -325,8 +286,8 @@ class ChargingControllerTest {
         var gear: Int,
         var baseGear: Int = 8,
         var refreshSucceeds: Boolean = true,
-        var nativeRefreshSucceeds: Boolean = true,
-        var smartMode: Int = 1,
+
+
         var policyCategory: String = "test_scene",
         var policyChargeVal: Int? = 12,
         var policySpeedAdd: Int? = 1,
@@ -334,10 +295,11 @@ class ChargingControllerTest {
         override val isAvailable = true
         override val hasPermission = true
         val writes = mutableListOf<Int>()
-        val nativeChargeLevels = mutableListOf<Int>()
-        val nativeSpeedChargeAdds = mutableListOf<Int>()
-        val smartModeWrites = mutableListOf<Int>()
-        var smartModeReads = 0
+
+
+
+
+
         var refreshRequests = 0
 
         override fun readGlobal(name: String): String {
@@ -362,23 +324,6 @@ class ChargingControllerTest {
         override fun requestThermalPolicyRefresh(): Boolean {
             refreshRequests += 1
             return refreshSucceeds
-        }
-
-        override fun requestNativeChargeLevel(level: Int, speedAdd: Int): Boolean {
-            nativeChargeLevels += level
-            nativeSpeedChargeAdds += speedAdd
-            return nativeRefreshSucceeds
-        }
-
-        override fun readSmartChgMode(): Int {
-            smartModeReads++
-            return smartMode
-        }
-
-        override fun setSmartChgMode(value: Int): Boolean {
-            smartModeWrites += value
-            smartMode = value
-            return true
         }
     }
 }

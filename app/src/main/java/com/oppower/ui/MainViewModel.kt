@@ -20,6 +20,7 @@ import com.oppower.model.toControlTier
 import com.oppower.service.ChargeControlBus
 import com.oppower.service.ChargeControlService
 import com.oppower.shizuku.ShizukuGateway
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 data class UiState(
@@ -52,6 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val historyStore = ChartHistoryStore(application)
     private val pageVisible = MutableStateFlow(false)
     private var historySignature = ""
+    private val historyWriteInFlight = AtomicBoolean(false)
     @Volatile private var historyLoaded = false
     private var currentSessionOnline: Boolean? = null
     private var currentSessionRecord: ChargeRecord? = null
@@ -143,24 +146,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!visible) return@collectLatest
                 delay(50)
                 while (isActive) {
-                    val settings = mutable.value.settings
-                    val sample = withContext(Dispatchers.IO) {
-                        val battery = reader.snapshot(settings)
-                        val screenOn = getApplication<Application>()
-                            .getSystemService(PowerManager::class.java)
-                            .isInteractive
-                        val point = if (settings.historyEnabled) {
-                            historyStore.record(battery, screenOn = screenOn)
-                        } else {
-                            null
+                    try {
+                        val settings = mutable.value.settings
+                        val battery = withContext(Dispatchers.IO) {
+                            runCatching { reader.snapshot(settings) }
+                                .onFailure { android.util.Log.w("OPPower", "Battery sample failed", it) }
+                                .getOrNull()
                         }
-                        Triple(battery, point, ChargeControlBus.status.value)
+                        if (battery != null) {
+                            mutable.value = mutable.value.copy(
+                                battery = battery,
+                                controllerStatus = ChargeControlBus.status.value,
+                            )
+                            if (settings.historyEnabled &&
+                                historyWriteInFlight.compareAndSet(false, true)
+                            ) {
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    try {
+                                        val screenOn = getApplication<Application>()
+                                            .getSystemService(PowerManager::class.java)
+                                            .isInteractive
+                                        historyStore.record(battery, screenOn = screenOn)
+                                            ?.let(ChartHistoryBus::append)
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Throwable) {
+                                        android.util.Log.w("OPPower", "History sample failed", error)
+                                    } finally {
+                                        historyWriteInFlight.set(false)
+                                    }
+                                }
+                            }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        // A transient battery or database failure must not stop the
+                        // one-second page refresh permanently.
+                        android.util.Log.w("OPPower", "Battery refresh cycle failed", error)
                     }
-                    mutable.value = mutable.value.copy(
-                        battery = sample.first,
-                        controllerStatus = sample.third,
-                    )
-                    sample.second?.let(ChartHistoryBus::append)
                     delay(1_000L)
                 }
             }

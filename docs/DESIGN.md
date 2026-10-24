@@ -22,15 +22,17 @@ OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，�
 
 控制器在每个 1 秒周期重新读取 `cosa_ctc_value` 和 `Thermal Levels`，直接计算当前 gear。基础热控档位变化时，立即按新基础档计算新的 `cosa`，再得到新的计算 gear，不需要切换应用，也不先写 `cosa=0`。目标变化、首次开启或检测到外部把 `cosa` 改错时，当前周期直接写入计算值并回读。
 
-计算 gear 是热控总档，不会单独保证原生充电下发。OPPower 自身不在 ROM 的包名热控分类中，因此 OPPower 保持前台时 `getCurThermalPolicy` 可能返回 `null`，此时 `m2()` 没有可执行的新策略，实际充电级会保留上一条。为了保证目标即使在空策略下也生效，OPPower 在写入目标 `cosa` 和触发重算后，通过 `OplusBatteryService setChargingLevel` 调用系统内部的 `D1()`，把 OPPower 计算目标映射为原生充电级：目标 `0..1 → 0`、`2..4 → 7`、`5 → 5`、`6 → 3`、`7+ → 2`。gear 0 对应 ColorOS 的 `chargeVal=0, speedChargeAdd=-2` 策略行，正常模式下 `D1(0,-2)` 最终以 cooldown 0 调用 `setSmartCoolDown(0,0)`。若回读策略已经是 gear 0 对应的 `chargeVal=0, speedChargeAdd=-2`，直接复用系统门控而不调用 native 入口。需要下发时，只在进入目标、原生映射变化或策略 category 变为受限场景时执行；每个稳定目标最多额外补一次场景复协商。调用结果无论成功与否都记录为已尝试，失败时不在下一秒自动重试。同一目标保持期间不重复调用，避免软件自身持续唤醒 BatteryService 和 Charger HAL。暂停、关闭总开关、拔电和充满时回退到安全级 `2`。`chargeVal=--` 仅表示策略对象为空，界面另外显示已经成功下发的“原生充电级”。
+OPPower 不再调用 `OplusBatteryService setChargingLevel`，也不再发送 `set_charge(0,-2)` 广播。该广播接收器要求发送方持有 `oplus.permission.OPLUS_COMPONENT_SAFE`；Shizuku/ADB 只有 shell UID，命令即使返回 `Broadcast completed` 也没有送达接收器，实际不会进入 `D1()`。控制会话只保留“写 `cosa` → 回读 → 触发一次热控重算”。
 
-进入有效充电控制会话后，OPPower 通过 GuardElf 事务 20 设置 `SmartChgMode=0`。该值只在会话开始时按需读取、写入并确认一次，稳定期间不再每秒回读；暂停、关闭总开关、拔电或充满时恢复进入会话前读到的原值。OPPower 不读取、不写入、不恢复 `customize_charge_switch_state`。该增强与 `cosa`、原生充电级属于同一次控制会话，不改变用户选择的档位。
+Beta17 起，OPPower 不再读取或写入 GuardElf `SmartChgMode`。beta8 在只写 `cosa`、只触发一次热控重算时曾持续约 7 分钟达到 30 W 以上；后续加入 `SmartChgMode=0` 改变了这一自然策略条件，并带来额外 Binder 写入。当前控制会话只包含目标 `cosa` 的写入和一次热控刷新。
 
-`getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示和验收；代码只从中读取 `chargeVal` 作独立诊断。即使 `policy.gear` 仍是旧值，也不会影响 OPPower 的 `基础档 + cosa` 结果。`chargeVal` 不参与 gear 求和。热控复杂场景可能把同一个计算 gear 0 映射成 `chargeVal=12, speedChargeAdd=0`，因此 OPPower 不把回读的 `chargeVal` 当作下发是否成功的依据，而是以实际 `set_charge` 调用和安全边界的结果为准。
+`getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示和验收；代码只从中读取 `chargeVal` 作独立诊断。即使 `policy.gear` 仍是旧值，也不会影响 OPPower 的 `基础档 + cosa` 结果。`chargeVal` 不参与 gear 求和。热控复杂场景可能把同一个计算 gear 0 映射成 `chargeVal=12, speedChargeAdd=0`，因此 OPPower 不把回读的 `chargeVal` 当作 gear 计算依据，也不会用另一条原生充电命令覆盖热控结果。
 
 界面显示 `基础档 + cosa = 计算档位`，并单独显示 `chargeVal`。`cosa` 回读成功且计算结果等于目标后即标记达到目标。
 
-写入 `cosa` 后触发一次系统热控重算。热控监听 `oplus_camera_3rd_activity`，其回调调用 `ThermalControlUtils.g1()`，最终调用 `m.m2()`。OPPower 只把该设置的同一整数改成等价字符串写法（`0 ↔ 00`、`1 ↔ 01`）来触发监听，数值保持不变，不改变相机状态。`m2()` 内部固定安排约 5 秒后的计算，因此这是一次异步重算触发，不是应用侧等待 5 秒，也不会重排任务。
+写入 `cosa` 后触发一次系统热控重算。优先监听 `oplus_float_window_show`：其回调调用 `m.j2(null, 0ms)`，立即提交策略重算。OPPower 只把该设置的同一整数改成等价字符串写法（`0 ↔ 00`、`1 ↔ 01`）来触发监听，数值保持不变。若该值不可用，才回退到 `oplus_camera_3rd_activity`；相机回调最终调用 `m.m2()`，内部约 5 秒后计算。两条路径都只触发一次，不在应用侧等待。
+
+beta20 起取消自动 gear 1 保护。目标为 gear 0 时，控制器始终按“基础档 + cosa = 0”立即下发并刷新，不因温度自动改写目标。电池功率使用与 LLPower 相同的 `BatteryManager.getLongProperty(CURRENT_NOW)`，仅当它返回 0 时回退到 `CURRENT_AVERAGE`。页面 1 秒采样与历史数据库写入分离，单次采样或写库异常不会终止刷新循环。
 
 `cosa_ctc_value` 的可用范围为 `-9..9`。`-10` 以下会进入策略无效哨兵，控制器禁止写入。若目标在安全范围内不可达，界面明确显示基础档和所需 `cosa`，控制器不越界写入。
 
@@ -150,8 +152,8 @@ T ≥ T2                        → 温度条件 2 的目标
 
 - 大档内部按 0.5°C 分段，从本档实测 gear 集合等距选择；温度越低使用越高功率端。
 - 均衡档内部只看温度；电量只决定是否暂停整个 gear 策略。
-- 用户选择基础档、修改自定义规则或切换目标时不做防抖；当前控制周期按“目标 − 基础档”动态计算目标 `cosa`，只写一次并触发一次系统重算，再把目标映射为原生充电级直接下发一次。
-- 计算 gear 只由 `Thermal Levels[0] + cosa` 得到；`policy.gear` 缓存不参与计算或验收，`chargeVal` 只显示为诊断字段。同一目标保持期间不重复写入 `cosa`、不重排 `m2()`，也不重复下发原生 `setChargingLevel`。
+- 用户选择基础档、修改自定义规则或切换目标时不做防抖；当前控制周期按“目标 − 基础档”动态计算目标 `cosa`，只写一次并触发一次系统重算。
+- 计算 gear 只由 `Thermal Levels[0] + cosa` 得到；`policy.gear` 缓存不参与计算或验收，`chargeVal` 只显示为诊断字段。同一目标保持期间不重复写入 `cosa`、不重排 `m2()`，也不调用原生 `setChargingLevel`。
 - 暂停策略、SOC 锁定与 100% 充满规则优先于温度恢复。
 - 原生热保护持续运行，应用不会伪装或关闭温度来源。
 
@@ -180,12 +182,9 @@ settings get system oplus_camera_3rd_activity
 settings put system oplus_camera_3rd_activity 0|1|00|01
 dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy
 dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus
-service call guardelfthermalcontrol 19
-service call guardelfthermalcontrol 20 s16 0..255
-dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 0|2|3|5|7
 ```
 
-不接受任意 shell、分号拼接、命令替换或其他设置名。`oplus_camera_3rd_activity` 只允许 `0/1/00/01` 四种等价写法，用于数值不变的监听触发。`setChargingLevel` 只允许已验证的原生级 `0/2/3/5/7`。`set_charge` 广播从 beta13 起不再列入白名单，因为 shell 身份收到 `Broadcast completed` 但未实际到达 `D1()`。除 Shizuku 自身授予的能力外，不绕过签名、SELinux、HAL 或 OEM 组件权限。
+不接受任意 shell、分号拼接、命令替换或其他设置名。`oplus_float_window_show` 与回退入口 `oplus_camera_3rd_activity` 只允许 `0/1/00/01` 四种等价写法，用于数值不变的监听触发。`setChargingLevel`、`SmartChgMode` 和 `set_charge` 广播均不在白名单。除 Shizuku 自身授予的能力外，不绕过签名、SELinux、HAL 或 OEM 组件权限。
 
 ## 10. 当前限制
 

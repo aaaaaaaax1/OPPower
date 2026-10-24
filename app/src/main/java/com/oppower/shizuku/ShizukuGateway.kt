@@ -129,48 +129,28 @@ class ShizukuGateway(context: Context) : ChargingGateway {
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus")
 
     /**
-     * ThermalControlUtils observes this system setting and calls m2() when its
-     * value changes. Rewriting the same integer with an equivalent textual
-     * representation (0/00 or 1/01) triggers exactly one policy recomputation
-     * without changing the camera state seen by Android.
+     * ThermalControlUtils observes both settings. A float-window change calls
+     * j2(null, 0ms), which requests an immediate policy recomputation. The
+     * camera callback calls m2(), whose internal delay is about five seconds,
+     * so it remains only as a compatibility fallback.
+     *
+     * Rewriting the same integer with an equivalent textual representation
+     * (0/00 or 1/01) preserves the system value while triggering one observer.
      */
     override fun requestThermalPolicyRefresh(): Boolean {
-        val current = execute("settings get system oplus_camera_3rd_activity").trim()
+        if (runCatching { refreshViaAlias("oplus_float_window_show") }.getOrDefault(false)) {
+            return true
+        }
+        return runCatching { refreshViaAlias("oplus_camera_3rd_activity") }.getOrDefault(false)
+    }
+
+    private fun refreshViaAlias(name: String): Boolean {
+        val current = execute("settings get system $name").trim()
         val numeric = current.toIntOrNull() ?: return false
         val alias = thermalRefreshAlias(current) ?: return false
-        execute("settings put system oplus_camera_3rd_activity $alias")
-        return execute("settings get system oplus_camera_3rd_activity")
-            .trim()
-            .toIntOrNull() == numeric
+        execute("settings put system $name $alias")
+        return execute("settings get system $name").trim().toIntOrNull() == numeric
     }
-
-    override fun requestNativeChargeLevel(level: Int, speedAdd: Int): Boolean {
-        if (level !in NATIVE_CHARGE_LEVELS) return false
-        if (speedAdd != 0 && !(level == 0 && speedAdd == -2)) return false
-        // The implicit set_charge broadcast is accepted by ActivityManager but does
-        // not reach D1() for Shizuku's shell identity on ColorOS 17. The service's
-        // debug command executes D1(level, 0, "test") inside BatteryService and is
-        // confirmed to reach Charger HAL. In normal mode D1(0, -2) also resolves to
-        // setSmartCoolDown(0, 0), so this is the verified downstream path for gear 0.
-        val output = execute(
-            "dumpsys activity service com.oplus.battery/.OplusBatteryService " +
-                "setChargingLevel $level",
-        )
-        return output.contains("set charging level = $level")
-    }
-
-    override fun readSmartChgMode(): Int? {
-        val output = execute("service call guardelfthermalcontrol 19")
-        val match = SMART_MODE_RESULT.find(output) ?: return null
-        return match.groupValues[2].toIntOrNull(16)
-    }
-
-    override fun setSmartChgMode(value: Int): Boolean {
-        if (value !in 0..255) return false
-        val output = execute("service call guardelfthermalcontrol 20 s16 $value")
-        return SMART_MODE_RESULT.find(output)?.groupValues?.get(1) == "00000000"
-    }
-
     private fun execute(command: String): String = awaitService().execute(command)
 
     private fun awaitService(): IPrivilegedCommandService {
@@ -193,8 +173,8 @@ class ShizukuGateway(context: Context) : ChargingGateway {
 
     companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-        val NATIVE_CHARGE_LEVELS = setOf(0, 2, 3, 5, 7)
-        val SMART_MODE_RESULT = Regex("""Result: Parcel\(\s*([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})""")
+
+
     }
 }
 

@@ -95,7 +95,7 @@ V12 `ICharger` 的 `ChgFuncFlag.SET_CHG_UP_LIMIT_VALUE` 名字容易被误认为
 - 目标 `cosa = 目标 gear - Thermal Levels[0]`；基础档变化时立即重新计算，得到新的计算 gear。
 - `getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示或验收，代码只读取 `chargeVal` 作独立诊断。
 - 目标变化、首次开启或检测到外部 `cosa` 漂移时，直接覆盖动态计算出的目标值并回读 `cosa`，不先写 `0`。
-- 写入后只触发一次系统热控重算：把 `oplus_camera_3rd_activity` 的同一整数在 `0/00` 或 `1/01` 之间切换。数值不变，监听回调调用 `m2()`；系统内部安排约 5 秒后的计算。
+- 写入后只触发一次系统热控重算：优先把 `oplus_float_window_show` 的同一整数在 `0/00` 或 `1/01` 之间切换。数值不变，监听回调调用 `j2(null, 0ms)` 并立即提交重算。若该值不可用，才回退到 `oplus_camera_3rd_activity`；相机回调调用 `m2()`，系统内部约 5 秒后计算。
 - 同一目标保持且基础档未变化时不重复写 `cosa`、不重排 `m2()`，也不重复下发原生 `setChargingLevel`。应用继续每秒读取基础档和 `cosa`；`SmartChgMode` 每个充电会话只确认一次。
 - `基础档 + cosa == target` 即达到计算目标；`policy.gear` 缓存和 `chargeVal` 都不参与该判断。
 - 温度下降 5 秒、恢复 8 秒的确认仍属于热安全规则；用户选择和档位切换没有防抖。
@@ -231,3 +231,90 @@ GuardElf 权限边界补充：事务 34–39 对 shell 返回 `READ_COMMON` 拒�
 3. 若高功率只短暂出现，记录系统下一次覆盖它的来源（`m2()`、`float_window_scene_102`、cooldown 写回或充电协议状态），寻找单次写入能持久生效的更高层入口。
 
 复测前必须核对 SOC、温度、充电器协商电压/电流、基础档、`cosa`、计算 gear、policy category、`chargeVal`、`speedChargeAdd` 和实际功率。只有功率变化先于温度变化、且排除 SOC 与协商条件后，才能把某个温度相关参数视为候选增益。
+
+## 第三轮场景配置实测（2026-10-24）
+
+设备未接 AC，电量 83%，电池温度约 39.9°C。测试目标是确认可写入口是否能够改变实际热控策略，不以未接电状态推断瓦数。
+
+| 入口 | 写入与恢复 | 策略回读 | 判定 |
+| --- | --- | --- | --- |
+| `cosa_gameMode=0` | `com.oplus.appplatform.settings/nonpersist` 写入成功，随后删除 | category 不变，gear 7，chargeVal 2 | 无当前场景收益 |
+| `cosa_gameMode=1` | 同上 | category 不变，gear 7 → 8，restrict 0 → 1，modem 0 → 1，disVideoSR 0 → 1，chargeVal 2 | 增加限制，排除 |
+| `cosa_gameMode=2` | 同上 | 恢复为 gear 7、chargeVal 2 | 无收益 |
+| `cosa_refreshSet=reset` | 同上 | 可触发控制器刷新 | 仅刷新触发，不是功率参数 |
+| `debug_gamemode_value=1` | global 写 1，随后恢复 0 | category、gear、chargeVal 均不变 | 非游戏前台无收益 |
+| `oplus_float_window_show=0` | system 写 0，HOME → 抖音后仍为 `category_16_fw_scene_102`；随后恢复 1 | gear 7，chargeVal 2 | 不能解除浮窗场景 |
+| `updateMaxChargeCurrent()` | 源码审计 | Binder 实现固定返回 false | 空实现 |
+| `updateMaxChargeTemperature()` | 源码审计 | Binder 实现固定返回 false | 空实现 |
+| `updateMinChargeTemperature()` | 源码审计 | Binder 实现固定返回 false | 空实现 |
+
+所有非持久测试键均已删除，`oplus_float_window_show` 已恢复 1，`debug_gamemode_value` 已恢复 0，微信进程和浮窗未处理。
+
+阈值仍采用 `OPERATIONS.md` 的正式标准：实际功率提升至少 5 W、持续至少 30 秒、两轮可重复。本轮没有参数达到该标准。
+
+## 第四轮接电复核（2026-10-24）
+
+设备电量 79%–82%，电池温度 38.7–40.1°C，AC 实际接电，OPPower 强制亮屏快充开启。基线外接功率计约 15 W；热控基础档 6–7，`cosa=-6/-7` 使计算 gear 0，但浮窗策略为 `chargeVal=12`、`speedChargeAdd=0`。
+
+- `cosa_gameMode=1` 经 nonpersist Provider 写入、回读成功。持续 30 秒外接功率计约 16 W，没有高 5 W 的持续变化；`chargeVal` 仍为 12。测试后键已删除，未达到有效标准。
+- `/sys/class/oplus_chg/common/bcc_current` 在源码中会写入 VOOC/UFCS/PPS 的 BCC 电流 votable，是真实电流控制节点；设备上 shell/Shizuku UID 2000 访问 `/sys/class/oplus_chg/common` 返回 Permission denied，因此当前权限不可用。
+- GuardElf 事务 45 `getChgConfig` 和事务 40 `getChargingModeInGsmCall` 均返回 `com.oplus.permission.safe.POWER` 权限拒绝，不能作为可接入入口。
+- `smart_charge_switch_state` 与 `smart_charge_protection_switch_state` 当前均为 1。两项将在 AC 下分别做开启/关闭 A/B，尚未完成功率验证，暂不作为有效参数。
+
+本轮新增参数没有达到“提升至少 5 W、持续至少 30 秒、两轮可重复”的标准。当前 SOC 已到 82%，高 SOC 本身会显著压低充电功率；后续高功率候选应在约 60%–70% SOC 下复核。
+## beta16 跳 0 W 修复与原生写入移除（2026-10-24）
+
+真机在一次 gear 0 充电中观察到约 40 W 后突然跳到 0 W，随后恢复并再次跳 0 W，最终约 27 W。此前控制器在写入 `cosa` 并触发热控刷新后，同一周期还调用 `setChargingLevel`。ColorOS 场景热控会自行重算并写回 `cooldown=12/15`，因此两套控制链可能在 `0 → 12 → 0` 之间争夺最终值；用户实测也确认 `setChargingLevel` 与 `cosa` 形成的 gear 0 作用重合。
+
+beta16 的决定：
+
+- 完整移除控制器、Shizuku gateway、命令白名单中的 `setChargingLevel`。
+- 不再保存或显示原生充电级，不在暂停、拔电、关闭或充满时回写原生安全 level。
+- 保留 `cosa` 写入、回读和单次热控刷新；系统自行生成的 `chargeVal`、`speedChargeAdd`、category 与 cooldown 只用于诊断。
+- 该路径不得为短期提功率重新加入；`OPERATIONS.md` 第 0 节已列为强制约束。
+
+验证结果：34 项 JVM 单测全部通过，包含 14 项充电控制器测试和 3 项 Shizuku 白名单测试。测试确认 gear 0 只产生一次 `cosa=-8` 写入和一次热控刷新，稳定期间不重复写入，并显式拒绝 `setChargingLevel 0`。APK 位于 `release/1.0.0-beta16/OPPower-1.0.0-beta16-debug.apk`，SHA-256 为 `A3C3294AC09B5D12C69229DC39EB543F0645990DCC21DD26025541C3D00C4911`，并已安装到 RMX8899（versionCode 16）。跳 0 W 的接电复验仍待完成。
+## beta17：恢复 beta8 自然策略条件（2026-10-24）
+
+从设备内 OPPower 24 小时曲线数据库复核 2026-10-23 下午记录：
+
+- `15:47–15:54` 连续约 7 分钟保持 30 W 以上，分钟均值约 30.45–35.40 W，温度约 40.0–41.4°C，SOC 66–78%。
+- 当时运行 beta8；控制器只写 `cosa` 并触发一次热控重算，没有 `setChargingLevel`，也没有 `SmartChgMode` 写入。
+- beta12 的 `set_charge(level=0, speedChargeAdd=-2)` 广播虽然参数设计正确，但真机日志只显示广播成功，没有进入 `D1()`，不能复现这段自然高功率。
+
+beta17 因此移除后续加入的 GuardElf `SmartChgMode` 读取、写入、恢复和命令白名单，不增加任何守门轮询。随后复核确认，`set_charge(0,-2)` 广播接收器要求发送方持有 `oplus.permission.OPLUS_COMPONENT_SAFE`；Shizuku/ADB 的 shell UID 不持有该签名权限，`Broadcast completed` 只说明命令被受理，实际不会进入 `D1()`。该无效候选已从控制器、Shizuku 白名单、测试和设计书中删除，只保留 `cosa` 写入与一次热控刷新。
+
+## beta18 立即刷新候选（2026-10-24）
+
+`ThermalControlUtils.d1()` 对 `oplus_float_window_show` 的监听调用 `m.j2(null, 0ms)`，与 `m2()` 的约 5 秒延迟不同。beta18 因此把等值字符串切换 `0/00`、`1/01` 作为首选刷新触发器，并保留相机入口作为兼容回退。
+
+本次只验证了代码路径与 JVM 单测；设备在验证时处于安全锁屏且未接 AC，`getCurThermalPolicy` 返回 `null`，不能据此判断刷新失败或功率提升。下一次真机验收必须在物理解锁、真实亮屏、AC 在线和普通前台场景下进行。
+## beta19 gear 0 脉冲保护（2026-10-24）
+
+设备逐秒数据库显示 gear 0 在约 41°C 开始出现 10 mA 停顿，应用功率约 0.038 W；关闭 OPPower 后仍可复现，说明不是 `cosa` 写入造成。gear 1 手动保持两轮均未出现 0 W，功率约 33–38 W。
+
+beta19 在最大输出目标且温度达到 40.5°C 时立即切到 gear 1，不做 5 秒确认，并在本段最大输出内保持。新增单元测试覆盖该切换。JVM 单测通过；安装后的真实接电复验仍需确认 0 W 消失和 30 W 以上功率保持。
+
+## beta20：撤销 gear 1 保护、采样与刷新隔离（2026-10-24）
+
+beta19 的 gear 1 自动保护不符合最终要求，beta20 已删除该逻辑和对应测试。gear 0 继续由实时基础档计算 `cosa` 并立即刷新。
+
+应用侧对“LLPower 正常而 OPPower 显示 0 W”增加了两项隔离：
+
+- 使用 `getLongProperty(CURRENT_NOW)`，与 LLPower 的读取路径一致；只有当前值为 0 时才读取 `CURRENT_AVERAGE`。
+- 页面每秒刷新不再等待历史 SQLite 写入；采样、写库和控制循环的临时异常都不会终止后续周期。
+
+真机验证：
+
+- 版本码 20、版本名 `1.0.0-beta20`，覆盖安装成功并保留数据。
+- 接电后 OPPower 前台，目标 gear 0 可立即形成；无需切换应用。
+- 在 SOC 约 57%–59%、温度约 38–39°C 时，系统基础档 5–6，`cosa=-5/-6`，实际功率约 22–24 W，主页面持续刷新。
+- 微信无通话悬浮窗、OPPower 前台时，热控类别为 `common_config`，基础档 5–6，策略为 `chargeVal=3, speedChargeAdd=-2`，实际功率约 22–24 W，仍未达到 30 W。
+
+Thermal Levels 写入验证：
+
+- `getThermalStatus` 可正常读取。
+- `setThermalControlTest 1`、`setTempLevel 6/7`、`setThermalControlTest 0` 均返回 `cmd not allow`。
+- 门控属性 `sys.deepsleep.allow.debug` 为空，当前 shell/Shizuku UID 2000 无法启用测试模式；真实 Thermal Levels 未被修改。
+
+验证通过项：JVM 单测、Debug 构建和覆盖安装。未通过项：gear 0 稳定达到 30 W 以上；需要继续寻找不依赖修改 Thermal Levels 的原生功率条件。

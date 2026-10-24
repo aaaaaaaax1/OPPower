@@ -24,31 +24,6 @@ data class ResolvedGear(
 object GearCalculator {
     const val COSA_MIN = -9
     const val COSA_MAX = 9
-    const val SAFE_NATIVE_CHARGE_LEVEL = 2
-
-    /**
-     * Fallback mapping for the global policy when ColorOS has no policy object
-     * for OPPower itself. [ThermalControlUtils.D1] receives this value as its
-     * charge level, so zero is the least restrictive state used by the high
-     * power path.
-     */
-    fun nativeChargeLevelForGear(targetGear: Int): Int = when {
-        targetGear <= 1 -> 0
-        targetGear <= 4 -> 7
-        targetGear == 5 -> 5
-        targetGear == 6 -> 3
-        else -> SAFE_NATIVE_CHARGE_LEVEL
-    }
-
-    /**
-     * ColorOS uses the invalid-speed sentinel -2 together with charge level 0
-     * when its ordinary policy reaches the unrestricted cooldown row. Level 0
-     * reaches the same setSmartCoolDown(0, 0) branch; the sentinel documents the
-     * policy state OPPower is trying to reproduce.
-     */
-    fun nativeSpeedChargeAddForGear(targetGear: Int): Int =
-        if (targetGear <= 0) -2 else 0
-
     fun parseThermalStatus(raw: String): ThermalStatus {
         val levels = Regex("Thermal Levels = \\[([^]]*)]")
             .find(raw)
