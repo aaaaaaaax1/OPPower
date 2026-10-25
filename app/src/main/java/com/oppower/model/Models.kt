@@ -1,5 +1,21 @@
 package com.oppower.model
 
+data class SystemAccessState(
+    val notificationsAllowed: Boolean = false,
+    val statusNotificationChannelEnabled: Boolean = true,
+    val liveNotificationChannelEnabled: Boolean = true,
+    val batteryUnrestricted: Boolean = false,
+    val overlayAllowed: Boolean = false,
+    val accessibilityEnabled: Boolean = false,
+) {
+    fun notificationsReady(usesLiveChannel: Boolean): Boolean =
+        notificationsAllowed && if (usesLiveChannel) {
+            liveNotificationChannelEnabled
+        } else {
+            statusNotificationChannelEnabled
+        }
+}
+
 data class BatterySnapshot(
     val currentMa: Int = 0,
     val voltageMv: Int = 0,

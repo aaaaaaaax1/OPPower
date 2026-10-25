@@ -318,3 +318,47 @@ Thermal Levels 写入验证：
 - 门控属性 `sys.deepsleep.allow.debug` 为空，当前 shell/Shizuku UID 2000 无法启用测试模式；真实 Thermal Levels 未被修改。
 
 验证通过项：JVM 单测、Debug 构建和覆盖安装。未通过项：gear 0 稳定达到 30 W 以上；需要继续寻找不依赖修改 Thermal Levels 的原生功率条件。
+
+## `appCategory=game` 热控分类对照（2026-10-24）
+
+- 设备：RMX8899 / ColorOS 17；真实亮屏、AC 接电、OPPower 前台；SOC 68%–72%，温度 41.0–41.9°C。
+- 临时 Manifest 设置 `android:appCategory="game"` 后，`cmd game list-modes com.oppower` 返回可用模式 `[standard,custom]`，并成功设为 `custom`。
+- 修正测试悬浮窗的主线程创建后，系统窗口列表确认存在 OPPower 的 `TYPE_APPLICATION_OVERLAY`；`getCurThermalPolicy` 一度返回 `float_window_common / gearVal=0 / chargeVal=-2 / speedChargeAdd=-2`。
+- 单次悬浮窗设置重算日志仍为 `appType=-1`、`configItemName=common_config`、`float={com.oppower}`、`full={com.oppower}`；没有 `category_4_fw_common`，也没有 `setSmartCoolDown(0,0)`。
+- 电池侧功率约 24.8 W（5.69 A × 4.356 V）。这与既有 gear 0 水平一致，没有可重复的额外增益。
+- 临时测试包能进入 `category_4_fw_common`，依赖厂商热控 XML 中的 `appType=4` 分类；普通 Manifest 的游戏声明不足以复制该条件。
+- 已恢复 Manifest、重置游戏模式、关闭悬浮窗测试开关、恢复 Overlay app-op 与 `oplus_float_window_show`，并重新构建安装普通版本。该路径排除，不再重复。
+
+## 2026-10-25 服务接口排除
+
+- `power_monitor`：无可用功率键或 setter，shell 控制还需 `DEVICE_POWER`。
+- `horae`：只承担热控状态/温度/屏幕状态交互；shell 调用被 SELinux 拒绝。
+- `oplus_battery_stats_service`：只有 binder call stats 与 UID power sipper 查询，均为只读。
+- 当前未接 AC，因此没有把任何设置写入结果记为功率收益。`smart_charge_switch_state` 和 `smart_charge_protection_switch_state` 仍待同条件 AC A/B。
+- OPPower 前台受微信浮窗影响时策略为 `common_config_float_window_scene_102 / chargeVal=4`；不能与历史 `common_config / chargeVal=0` 高功率段直接比较。
+
+## 智能充电开关 AC A/B（2026-10-25）
+
+- 固定条件：OPPower beta20 前台、AC 在线、计算 gear 0、`float_window_scene_102 / chargeVal=12 / speedChargeAdd=0`。
+- `smart_charge_switch_state: 1 → 0`：基线 25.40 W；首轮 26.39 W；恢复后 26.13 W；再次关闭 26.68 W。重复增益约 0.55–0.99 W，温度同步上升，不能视为突破功率层；beta21 按产品决定作为补充提升保留并自动恢复。
+- `smart_charge_protection_switch_state: 1 → 0`：26.81 W → 26.48 W，策略不变，不成立。
+- 两项测试后均恢复为 `1`，没有新增功率参数。
+- 当前 HotPolicy 为 `float_window_scene_102`，而历史 cooldown 0 来自 `common_config / chargeVal=0`。MultiApp 用户 999 的微信仍持有多个现存悬浮窗；对主用户 app-op 写入不会清除这些窗口。
+
+## beta21：补充充电开关与设置权限真值刷新（2026-10-25）
+
+- 控制器在首次生效时保存 `smart_charge_switch_state` 原值并写 0；稳定时不重复写，暂停、拔电、充满、关闭总开关和服务停止时恢复。
+- 新增生命周期单测，验证相同启用周期只写一次 0，关闭总开关后恢复原值 1。
+- 设置页系统状态不再由界面临时缓存：通知权限、通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 安装/运行/授权/服务连接状态统一进入 UI 状态，并在 `onResume`、通知授权回调和 Shizuku 授权回调后刷新。
+- JVM 单测、Debug Kotlin 编译、lint（0 error）和 Debug APK 构建通过。
+- beta21 已通过 `192.168.10.7:33881` 覆盖安装；`versionCode=21`、`versionName=1.0.0-beta21`，应用启动成功，返回状态为 `WARM / ok`，未出现崩溃日志。
+- 真机通知设置页已显示系统通知权限“已允许”和实时活动通知渠道“已开启”，确认界面使用了系统真值。
+- 验收时设备未接 AC，服务未运行，`smart_charge_switch_state` 已回读为 `1`；控制期间写 0 和接电增益仍需后续 AC 条件复测。
+
+## beta22：电流与功率 0 W 跳变修复（2026-10-25）
+
+- 真机采样定位：快充时电池服务返回 `CURRENT_NOW` 约 `-9947..-10065`，充电保持、热控 gear 0 保持。0 W 帧与旧实现的 `abs(value) >= 10000` 微安判断完全对应。
+- LLPower 2.0.4 反编译确认：来源顺序为 `CURRENT_NOW`、`CURRENT_AVERAGE`、`/sys/class/power_supply/battery/current_now`、`/sys/class/power_supply/main/current_now`、`/sys/class/power_supply/battery/batt_current`；仅 `abs(value) > 20000` 才除以 1000。
+- beta22 同步该阈值和来源顺序，并增加无效哨兵过滤、高电量整数安培异常值清理、电压 sysfs 回退；电流与功率共用同一显示电流。
+- 新增 4 项边界单测，完整 40 项 JVM 单测、Debug 编译和 lint（0 error）通过。
+- beta22 已覆盖安装到 RMX8899，`versionCode=22`、`versionName=1.0.0-beta22`。验收时设备已拔电，因此高强度快充下的连续 1 秒真机采样待重新接电后补测。

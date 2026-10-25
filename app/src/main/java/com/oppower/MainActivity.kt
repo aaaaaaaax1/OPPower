@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var foregroundServiceRequested = false
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        viewModel.refreshRuntimeStatuses()
         ensureServiceStarted()
     }
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
@@ -79,8 +80,15 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         viewModel.setPageVisible(true)
-        viewModel.refreshShizukuState()
         ensureServiceStarted()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // System permission screens return through onResume rather than a
+        // content-state change. Re-read them here so settings never keep an
+        // obsolete authorization label.
+        viewModel.refreshRuntimeStatuses()
     }
 
     override fun onStop() {

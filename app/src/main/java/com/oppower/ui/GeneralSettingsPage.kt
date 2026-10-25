@@ -1,16 +1,10 @@
 package com.oppower.ui
 
-import android.Manifest
-import android.accessibilityservice.AccessibilityServiceInfo
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.PowerManager
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -134,8 +128,8 @@ private fun SettingsHomePage(
     onJoinQq: () -> Unit,
     onRequestShizuku: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val stableReady = notificationsEnabled(context) && batteryUnrestricted(context)
+    val stableReady = state.systemAccess.notificationsReady(usesLiveNotificationChannel()) &&
+        state.systemAccess.batteryUnrestricted
     SettingsPage(
         title = "设置",
         subtitle = "OPPower · 外观、通知、系统与数据",
@@ -168,11 +162,13 @@ private fun SettingsHomePage(
             SettingsMenuRow(
                 icon = "◒",
                 title = "通知设置",
-                summary = if (state.settings.liveNotificationEnabled) {
-                    "状态通知已开启 · ${state.settings.notificationRefreshSeconds} 秒刷新"
-                } else {
-                    "状态通知已关闭"
+                summary = when {
+                    !state.systemAccess.notificationsReady(usesLiveNotificationChannel()) -> "系统通知未允许"
+                    state.settings.liveNotificationEnabled ->
+                        "状态通知已开启 · ${state.settings.notificationRefreshSeconds} 秒刷新"
+                    else -> "状态通知已关闭"
                 },
+                accent = !state.systemAccess.notificationsReady(usesLiveNotificationChannel()),
                 onClick = { onNavigate(SettingsScreen.NOTIFICATIONS) },
             )
         }
@@ -328,14 +324,26 @@ private fun NotificationSettingsPage(
             SettingsDivider()
             SettingActionRow(
                 title = "系统通知权限",
-                value = if (notificationsEnabled(context)) "已允许" else "前往设置",
+                value = if (state.systemAccess.notificationsAllowed) "已允许" else "未允许 · 前往设置",
+                onClick = { openNotificationSettings(context) },
+            )
+            SettingsDivider()
+            SettingActionRow(
+                title = if (usesLiveNotificationChannel()) "实时活动通知渠道" else "状态通知渠道",
+                value = when {
+                    usesLiveNotificationChannel() && !state.systemAccess.liveNotificationChannelEnabled ->
+                        "已关闭 · 前往设置"
+                    !usesLiveNotificationChannel() && !state.systemAccess.statusNotificationChannelEnabled ->
+                        "已关闭 · 前往设置"
+                    else -> "已开启"
+                },
                 onClick = { openNotificationSettings(context) },
             )
             if (Build.VERSION.SDK_INT >= 36) {
                 SettingsDivider()
                 SettingActionRow(
                     title = "流体云实时活动",
-                    value = "在系统通知页开启",
+                    value = "在系统通知页检查显示权限",
                     onClick = { openNotificationSettings(context) },
                 )
             }
@@ -405,10 +413,10 @@ private fun StableOperationPage(
     onNavigate: (SettingsScreen) -> Unit,
 ) {
     val context = LocalContext.current
-    val notificationOk = notificationsEnabled(context)
-    val batteryOk = batteryUnrestricted(context)
-    val overlayOk = Settings.canDrawOverlays(context)
-    val accessibilityOk = accessibilityKeepAliveEnabled(context)
+    val notificationOk = state.systemAccess.notificationsReady(usesLiveNotificationChannel())
+    val batteryOk = state.systemAccess.batteryUnrestricted
+    val overlayOk = state.systemAccess.overlayAllowed
+    val accessibilityOk = state.systemAccess.accessibilityEnabled
     SettingsPage("稳定运行", "保证亮屏快充与记录服务持续工作", onBack) {
         SettingsSection("运行检查") {
             StatusRow("通知权限", if (notificationOk) "已就绪" else "需要授权", notificationOk)
@@ -468,8 +476,8 @@ private fun AdvancedKeepAlivePage(
     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
 ) {
     val context = LocalContext.current
-    val overlayGranted = Settings.canDrawOverlays(context)
-    val accessibilityEnabled = accessibilityKeepAliveEnabled(context)
+    val overlayGranted = state.systemAccess.overlayAllowed
+    val accessibilityEnabled = state.systemAccess.accessibilityEnabled
     SettingsPage("高级保活", "非特殊情况无需开启", onBack) {
         SettingsSection("悬浮窗保活") {
             SettingSwitchRow(
@@ -578,9 +586,16 @@ private fun SystemSettingsPage(
     onRequestShizuku: () -> Unit,
 ) {
     val context = LocalContext.current
-    val batteryOk = batteryUnrestricted(context)
+    val batteryOk = state.systemAccess.batteryUnrestricted
+    val notificationOk = state.systemAccess.notificationsReady(usesLiveNotificationChannel())
     SettingsPage("系统与诊断", "后台权限与数据来源", onBack) {
         SettingsSection("后台运行") {
+            SettingActionRow(
+                title = "系统通知权限",
+                value = if (notificationOk) "已允许" else "未允许 · 前往设置",
+                onClick = { openNotificationSettings(context) },
+            )
+            SettingsDivider()
             SettingActionRow(
                 title = "电池优化",
                 value = if (batteryOk) "不受限制" else "前往设置",
@@ -1028,18 +1043,7 @@ private fun fontSizeLabel(scale: Float): String = when {
     else -> "标准字号"
 }
 
-private fun notificationsEnabled(context: Context): Boolean =
-    context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
-
-private fun batteryUnrestricted(context: Context): Boolean =
-    context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
-
-private fun accessibilityKeepAliveEnabled(context: Context): Boolean {
-    val manager = context.getSystemService(AccessibilityManager::class.java)
-    val expected = "${context.packageName}/${context.packageName}.service.KeepAliveAccessibilityService"
-    return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-        .any { it.id.equals(expected, ignoreCase = true) }
-}
+private fun usesLiveNotificationChannel(): Boolean = Build.VERSION.SDK_INT >= 36
 
 private fun openNotificationSettings(context: Context) {
     context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
@@ -1079,7 +1083,8 @@ private fun shizukuStatus(state: UiState): String = when {
     !state.shizukuInstalled -> "未安装 · 打开下载页"
     !state.shizukuAvailable -> "未运行 · 打开 Shizuku"
     !state.shizukuPermission -> "未授权 · 授权给 OPPower"
-    else -> "已授权 OPPower · 服务已连接"
+    state.shizukuServiceConnected -> "已授权 OPPower · 特权服务已连接"
+    else -> "已授权 OPPower · 特权服务连接中"
 }
 
 private fun friendlyPowerGear(gear: Int): String = when (gear) {

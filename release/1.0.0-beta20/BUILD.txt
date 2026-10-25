@@ -1,0 +1,25 @@
+OPPower 1.0.0-beta20
+versionCode: 20
+versionName: 1.0.0-beta20
+Build: debug
+Built: 2026-10-24 14:10:39 +08:00
+APK: OPPower-1.0.0-beta20-debug.apk
+SHA-256: B40A00F6666B4A8A2A17BC0A389982558DFD98881556B1507786638825D36810
+
+Changes:
+- Removed the beta19 automatic gear 1 pulse guard. Target gear 0 remains gear 0.
+- Battery current now uses getLongProperty(CURRENT_NOW), matching LLPower, with CURRENT_AVERAGE fallback when CURRENT_NOW is zero.
+- UI one-second sampling is decoupled from history SQLite writes.
+- Battery refresh and foreground control loops survive transient exceptions and continue next cycle.
+- Immediate cosa write and one thermal refresh remain in place.
+- No setChargingLevel, SmartChgMode, set_charge broadcast, or continuous polling was added.
+
+Validation:
+- JVM unit tests passed.
+- Debug APK built and installed over existing data.
+- Real-device gear 0 reached immediately after enabling without switching apps.
+- No 0 W recurrence was observed during the beta20 verification window.
+- No-WeChat-overlay, OPPower foreground, common_config: chargeVal=3, speedChargeAdd=-2, about 22-24 W.
+- Launcher foreground with OPPower service in gear 0: about 23 W, no chargeVal=0.
+- Stable 30 W+ in gear 0 remains unresolved.
+- Thermal Levels writes are unavailable: setThermalControlTest/setTempLevel return cmd not allow because sys.deepsleep.allow.debug is not enabled.

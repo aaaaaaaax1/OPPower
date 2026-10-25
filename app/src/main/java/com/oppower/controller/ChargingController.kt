@@ -17,6 +17,8 @@ interface ChargingGateway {
 
     fun readGlobal(name: String): String
     fun putGlobal(name: String, value: Int)
+    fun readSystemSetting(name: String): String
+    fun putSystemSetting(name: String, value: Int)
     fun readThermalPolicy(): String
     fun readThermalStatus(): String
     fun requestThermalPolicyRefresh(): Boolean
@@ -32,6 +34,7 @@ class ChargingController(
     private var lastFull = false
     private var currentCosa = 0
     private var cosaInitialized = false
+    private var originalSmartChargeSwitch: Int? = null
     private var lastAppliedGear: Int? = null
     private var lastObservedGear: Int? = null
     private var appliedTier: ControlTier? = null
@@ -171,6 +174,8 @@ class ChargingController(
                         (target - baseGear) +
                         "，安全范围 ${GearCalculator.COSA_MIN}..${GearCalculator.COSA_MAX}",
                 )
+
+            ensureSmartChargeSwitchDisabled()
 
             val targetChanged = lastAppliedGear != target
             val needsApply = currentCosa != desiredCosa || targetChanged
@@ -343,7 +348,41 @@ class ChargingController(
     }
 
     private fun restoreBoth() {
+        runCatching { restoreSmartChargeSwitch() }
         runCatching { restoreOffset() }
+    }
+
+    private fun ensureSmartChargeSwitchDisabled() {
+        if (originalSmartChargeSwitch == null) {
+            originalSmartChargeSwitch = runCatching {
+                shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
+            }.getOrNull() ?: return
+        }
+        val current = runCatching {
+            shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
+        }.getOrNull() ?: return
+        if (current == 0) return
+        runCatching {
+            shizuku.putSystemSetting(SMART_CHARGE_SWITCH, 0)
+            val readBack = shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
+            check(readBack == 0) { "smart_charge_switch_state 回读不一致" }
+        }
+    }
+
+    private fun restoreSmartChargeSwitch() {
+        val original = originalSmartChargeSwitch ?: return
+        val current = runCatching {
+            shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
+        }.getOrNull() ?: return
+        if (current == original) {
+            originalSmartChargeSwitch = null
+            return
+        }
+        val restored = runCatching {
+            shizuku.putSystemSetting(SMART_CHARGE_SWITCH, original)
+            shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull() == original
+        }.getOrDefault(false)
+        if (restored) originalSmartChargeSwitch = null
     }
 
     private fun restoreOffset() {
@@ -386,6 +425,7 @@ class ChargingController(
 
     private companion object {
         const val TEMPERATURE_PAUSE_CANDIDATE = -1
+        const val SMART_CHARGE_SWITCH = "smart_charge_switch_state"
     }
 
     private data class ControlSettings(

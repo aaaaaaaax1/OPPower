@@ -66,6 +66,9 @@ class ShizukuGateway(context: Context) : ChargingGateway {
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
 
+    val isServiceConnected: Boolean
+        get() = synchronized(bindLock) { commandService != null }
+
     fun requestPermission() {
         if (!isAvailable || hasPermission) return
         runCatching { Shizuku.requestPermission(1001) }
@@ -122,6 +125,13 @@ class ShizukuGateway(context: Context) : ChargingGateway {
         execute("settings put global ${name.requireAllowedName()} $value")
     }
 
+    override fun readSystemSetting(name: String): String =
+        execute("settings get system ${name.requireAllowedSystemName()}")
+
+    override fun putSystemSetting(name: String, value: Int) {
+        execute("settings put system ${name.requireAllowedSystemName()} $value")
+    }
+
     override fun readThermalPolicy(): String =
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy")
 
@@ -168,6 +178,11 @@ class ShizukuGateway(context: Context) : ChargingGateway {
 
     private fun String.requireAllowedName(): String {
         require(this == "cosa_ctc_value")
+        return this
+    }
+
+    private fun String.requireAllowedSystemName(): String {
+        require(this == "smart_charge_switch_state")
         return this
     }
 

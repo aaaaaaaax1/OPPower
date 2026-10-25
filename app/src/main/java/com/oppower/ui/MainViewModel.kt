@@ -1,7 +1,11 @@
 package com.oppower.ui
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Application
+import android.app.NotificationManager
 import android.os.PowerManager
+import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.oppower.battery.BatteryReader
@@ -15,10 +19,12 @@ import com.oppower.model.ChartPoint
 import com.oppower.model.ControllerStatus
 import com.oppower.model.GearReadResult
 import com.oppower.model.RuntimeSettings
+import com.oppower.model.SystemAccessState
 import com.oppower.model.conservatismRank
 import com.oppower.model.toControlTier
 import com.oppower.service.ChargeControlBus
 import com.oppower.service.ChargeControlService
+import com.oppower.service.StatusNotificationChannels
 import com.oppower.shizuku.ShizukuGateway
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +50,8 @@ data class UiState(
     val shizukuInstalled: Boolean = false,
     val shizukuAvailable: Boolean = false,
     val shizukuPermission: Boolean = false,
+    val shizukuServiceConnected: Boolean = false,
+    val systemAccess: SystemAccessState = SystemAccessState(),
     val showIntro: Boolean = false,
 )
 
@@ -69,16 +77,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             val initial = withContext(Dispatchers.IO) {
-                val points = historyStore.load()
-                points to Triple(shizuku.isInstalled, shizuku.isAvailable, shizuku.hasPermission)
+                historyStore.load() to readRuntimeAccessSnapshot()
             }
             val points = initial.first
+            val access = initial.second
             currentSessionOnline = points.lastOrNull()?.acOnline
             mutable.value = mutable.value.copy(
                 points = points,
-                shizukuInstalled = initial.second.first,
-                shizukuAvailable = initial.second.second,
-                shizukuPermission = initial.second.third,
+                shizukuInstalled = access.shizukuInstalled,
+                shizukuAvailable = access.shizukuAvailable,
+                shizukuPermission = access.shizukuPermission,
+                shizukuServiceConnected = access.shizukuServiceConnected,
+                systemAccess = access.systemAccess,
             )
             historySignature = signature(points)
             historyLoaded = true
@@ -266,18 +276,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun onShizukuPermissionGranted() {
         shizuku.bind()
         refreshShizukuState()
+        viewModelScope.launch {
+            delay(500)
+            refreshRuntimeStatuses()
+        }
         ChargeControlBus.requestUpdate()
     }
 
     fun refreshShizukuState() {
+        refreshRuntimeStatuses()
+    }
+
+    fun refreshRuntimeStatuses() {
         viewModelScope.launch {
-            val state = withContext(Dispatchers.IO) {
-                Triple(shizuku.isInstalled, shizuku.isAvailable, shizuku.hasPermission)
-            }
+            val access = withContext(Dispatchers.IO) { readRuntimeAccessSnapshot() }
             mutable.value = mutable.value.copy(
-                shizukuInstalled = state.first,
-                shizukuAvailable = state.second,
-                shizukuPermission = state.third,
+                shizukuInstalled = access.shizukuInstalled,
+                shizukuAvailable = access.shizukuAvailable,
+                shizukuPermission = access.shizukuPermission,
+                shizukuServiceConnected = access.shizukuServiceConnected,
+                systemAccess = access.systemAccess,
             )
         }
     }
@@ -304,6 +322,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.markIntroSeen()
         mutable.value = mutable.value.copy(showIntro = false)
     }
+
+    private fun readRuntimeAccessSnapshot(): RuntimeAccessSnapshot {
+        val app = getApplication<Application>()
+        val notificationManager = app.getSystemService(NotificationManager::class.java)
+        val accessibilityManager = app.getSystemService(AccessibilityManager::class.java)
+        val accessibilityId =
+            "${app.packageName}/${app.packageName}.service.KeepAliveAccessibilityService"
+        return RuntimeAccessSnapshot(
+            shizukuInstalled = shizuku.isInstalled,
+            shizukuAvailable = shizuku.isAvailable,
+            shizukuPermission = shizuku.hasPermission,
+            shizukuServiceConnected = shizuku.isServiceConnected,
+            systemAccess = SystemAccessState(
+                notificationsAllowed = runCatching {
+                    notificationManager.areNotificationsEnabled()
+                }.getOrDefault(false),
+                statusNotificationChannelEnabled = notificationChannelEnabled(
+                    notificationManager,
+                    StatusNotificationChannels.STATUS,
+                ),
+                liveNotificationChannelEnabled = notificationChannelEnabled(
+                    notificationManager,
+                    StatusNotificationChannels.LIVE,
+                ),
+                batteryUnrestricted = app.getSystemService(PowerManager::class.java)
+                    .isIgnoringBatteryOptimizations(app.packageName),
+                overlayAllowed = Settings.canDrawOverlays(app),
+                accessibilityEnabled = accessibilityManager
+                    .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                    .any { it.id.equals(accessibilityId, ignoreCase = true) },
+            ),
+        )
+    }
+
+    private fun notificationChannelEnabled(
+        manager: NotificationManager,
+        channelId: String,
+    ): Boolean = runCatching {
+        manager.getNotificationChannel(channelId)?.importance != NotificationManager.IMPORTANCE_NONE
+    }.getOrDefault(false)
 
     private fun appendHistoryPoint(point: ChartPoint) {
         val current = mutable.value
@@ -433,4 +491,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             points = group,
         )
     }
+
+    private data class RuntimeAccessSnapshot(
+        val shizukuInstalled: Boolean,
+        val shizukuAvailable: Boolean,
+        val shizukuPermission: Boolean,
+        val shizukuServiceConnected: Boolean,
+        val systemAccess: SystemAccessState,
+    )
 }

@@ -52,6 +52,7 @@ internal object AllowedCommands {
         "settings get global cosa_ctc_value",
         "settings get system oplus_camera_3rd_activity",
         "settings get system oplus_float_window_show",
+        "settings get system smart_charge_switch_state",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus",
     )
@@ -59,9 +60,11 @@ internal object AllowedCommands {
     private val putThermalRefreshAlias = Regex(
         "settings put system (?:oplus_camera_3rd_activity|oplus_float_window_show) (?:0|1|00|01)",
     )
+    private val putSmartChargeSwitch = Regex("settings put system smart_charge_switch_state [01]")
 
     fun matches(command: String): Boolean =
         command in exact ||
             putCosa.matches(command) ||
-            putThermalRefreshAlias.matches(command)
+            putThermalRefreshAlias.matches(command) ||
+            putSmartChargeSwitch.matches(command)
 }

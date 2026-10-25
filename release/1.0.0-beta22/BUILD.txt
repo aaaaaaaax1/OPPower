@@ -1,0 +1,24 @@
+OPPower 1.0.0-beta22
+versionCode: 22
+versionName: 1.0.0-beta22
+Build: debug
+Built: 2026-10-25 13:24:06 +0800
+APK: OPPower-1.0.0-beta22-debug.apk
+SHA-256: D3961B385D2C7AE679A4591AA56427A76D7DECFF67AE330E092A4642E8CF4C72
+
+Changes:
+- Matched LLPower current source order: CURRENT_NOW, CURRENT_AVERAGE, then current_now sysfs fallbacks.
+- Matched LLPower's 20000 unit-conversion threshold, fixing ColorOS values near 10000 being mistaken for microamperes.
+- The old threshold converted roughly 10 A into roughly 10 mA and produced intermittent 0 W readings.
+- Added invalid sentinel filtering, near-full integer-ampere sanitization and voltage sysfs fallback.
+- UI current and power now use the same normalized current value.
+- Added boundary tests for -9947, 10009 and 10010 mA, 39.44 W calculation, sentinels and microampere values.
+- Kept smart_charge_switch_state lifecycle and live settings permission refresh from beta21.
+
+Validation:
+- 40 JVM unit tests passed.
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors.
+- Debug APK built successfully.
+- Debug APK installed over existing data on RMX8899.
+- Real-device one-second fast-charge sampling remains because AC was disconnected after installation.

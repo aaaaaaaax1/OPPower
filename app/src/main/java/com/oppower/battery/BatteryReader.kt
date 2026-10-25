@@ -6,6 +6,8 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import com.oppower.model.BatterySnapshot
 import com.oppower.model.RuntimeSettings
+import java.io.File
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class BatteryReader(private val context: Context) {
@@ -17,17 +19,19 @@ class BatteryReader(private val context: Context) {
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100)?.coerceAtLeast(1) ?: 100
         val percent = level * 100 / scale
-        val measuredVoltageMv = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0
+        val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val acOnline = plugged != 0
+        var measuredVoltageMv = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0
+        if (measuredVoltageMv <= 0) measuredVoltageMv = readFirstPositiveVoltageMv()
         val voltageMv = if (settings.virtualVoltage && measuredVoltageMv !in 3_000..5_500) {
             3_850
         } else {
             measuredVoltageMv
         }
         val temperatureC = ((intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f)
-        val acOnline = (intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
-        // Match LLPower's battery source order. Some ColorOS builds return a
-        // transient sentinel or zero from CURRENT_NOW while CURRENT_AVERAGE is
-        // still valid, which made the UI appear stuck at 0 W during charging.
+        // Match LLPower's current source order. CURRENT_NOW is not guaranteed
+        // to use microamperes on ColorOS: this device reports fast-charge values
+        // around 10_000 as mA, so the 20_000 threshold must match LLPower.
         val currentNow = runCatching {
             manager.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
         }.getOrDefault(0L)
@@ -38,13 +42,16 @@ class BatteryReader(private val context: Context) {
         } else {
             0L
         }
-        val rawCurrent = if (currentNow != 0L) currentNow else currentAverage
-        // BATTERY_PROPERTY_CURRENT_NOW is normally reported in microamperes.
-        val normalizedCurrent = if (kotlin.math.abs(rawCurrent) >= 10_000L) {
-            rawCurrent / 1_000f
-        } else {
-            rawCurrent.toFloat()
+        val rawCurrent = when {
+            currentNow != 0L -> currentNow
+            currentAverage != 0L -> currentAverage
+            else -> readFirstNonZeroCurrent()
         }
+        val normalizedCurrent = sanitizeCurrentReading(
+            currentMa = normalizeCurrentToMa(rawCurrent),
+            levelPercent = percent,
+            plugged = acOnline,
+        )
         // ColorOS reports current sign inconsistently across charge modes, and
         // some drivers continue to expose charging current while the screen-on
         // draw exceeds charger input. Use AC state for the power direction and
@@ -63,8 +70,8 @@ class BatteryReader(private val context: Context) {
         } else {
             correctedCurrent
         }
-        val measuredPower = correctedCurrent / 1000f * voltageMv / 1000f
-        val powerW = if (settings.absoluteCurrentPowerDisplay) kotlin.math.abs(measuredPower) else measuredPower
+        val measuredPower = calculatePowerW(correctedCurrent, voltageMv)
+        val powerW = if (settings.absoluteCurrentPowerDisplay) abs(measuredPower) else measuredPower
         return BatterySnapshot(
             currentMa = displayedCurrent.roundToInt(),
             voltageMv = voltageMv,
@@ -76,3 +83,64 @@ class BatteryReader(private val context: Context) {
         )
     }
 }
+
+private val invalidCurrentMarkers = setOf(
+    Int.MIN_VALUE.toLong(),
+    Int.MAX_VALUE.toLong(),
+    Long.MIN_VALUE,
+    Long.MAX_VALUE,
+)
+
+private val currentSysfsPaths = listOf(
+    "/sys/class/power_supply/battery/current_now",
+    "/sys/class/power_supply/main/current_now",
+    "/sys/class/power_supply/battery/batt_current",
+)
+
+private val voltageSysfsPaths = listOf(
+    "/sys/class/power_supply/battery/voltage_now",
+    "/sys/class/power_supply/battery/batt_vol",
+    "/sys/class/power_supply/Battery/voltage_now",
+    "/sys/class/power_supply/battery/voltage_ocv",
+)
+
+internal fun normalizeCurrentToMa(rawCurrent: Long): Float {
+    if (rawCurrent in invalidCurrentMarkers) return 0f
+    return if (abs(rawCurrent) > 20_000L) rawCurrent / 1_000f else rawCurrent.toFloat()
+}
+
+internal fun sanitizeCurrentReading(
+    currentMa: Float,
+    levelPercent: Int,
+    plugged: Boolean,
+): Float {
+    if (!plugged || levelPercent <= 98) return currentMa
+    val rounded = currentMa.roundToInt()
+    val integerMilliampMarker = abs(currentMa - rounded) < 0.001f &&
+        abs(rounded) >= 1_000 &&
+        abs(rounded) % 1_000 == 0
+    return if (integerMilliampMarker) 0f else currentMa
+}
+
+internal fun calculatePowerW(currentMa: Float, voltageMv: Int): Float =
+    currentMa / 1_000f * voltageMv / 1_000f
+
+private fun readFirstNonZeroCurrent(): Long = currentSysfsPaths.firstNotNullOfOrNull { path ->
+    runCatching {
+        File(path).takeIf { it.canRead() }?.readText()?.trim()?.toLongOrNull()
+    }.getOrNull()?.takeIf { it != 0L && it !in invalidCurrentMarkers }
+} ?: 0L
+
+private fun readFirstPositiveVoltageMv(): Int = voltageSysfsPaths.firstNotNullOfOrNull { path ->
+    runCatching {
+        val raw = File(path).takeIf { it.canRead() }?.readText()?.trim()?.toLongOrNull()
+        raw?.takeIf { it > 0L }?.let { value ->
+            val volts = when {
+                value > 100_000L -> value / 1_000_000f
+                value > 1_000L -> value / 1_000f
+                else -> value.toFloat()
+            }
+            (volts * 1_000f).roundToInt()
+        }
+    }.getOrNull()
+} ?: 0

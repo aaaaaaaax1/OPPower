@@ -101,6 +101,11 @@ internal fun MainPage(
     val shizukuAccessState = remember(state) {
         derivedStateOf { state.value.shizukuAvailable to state.value.shizukuPermission }
     }
+    val notificationAccessState = remember(state) {
+        derivedStateOf {
+            state.value.systemAccess.notificationsReady(usesLiveNotificationChannel())
+        }
+    }
     val historyAvailabilityState = remember(pointsState) {
         derivedStateOf {
             val points = pointsState.value
@@ -191,8 +196,14 @@ internal fun MainPage(
             val dischargeActionValue = remember(historyAvailabilityState) {
                 derivedStateOf { if (historyAvailabilityState.value.second) "查看 ›" else "等待数据" }
             }
-            val notificationValue = remember(settingsState) {
-                derivedStateOf { if (settingsState.value.liveNotificationEnabled) "已开启" else "已关闭" }
+            val notificationValue = remember(settingsState, notificationAccessState) {
+                derivedStateOf {
+                    when {
+                        !notificationAccessState.value -> "需授权"
+                        settingsState.value.liveNotificationEnabled -> "已开启"
+                        else -> "已关闭"
+                    }
+                }
             }
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -362,6 +373,8 @@ private fun SectionHeader(title: String, trailing: String) {
         Text(trailing, color = TextSecondary, fontSize = 9.sp)
     }
 }
+
+private fun usesLiveNotificationChannel(): Boolean = android.os.Build.VERSION.SDK_INT >= 36
 
 @Composable
 private fun ControlIssueCard(

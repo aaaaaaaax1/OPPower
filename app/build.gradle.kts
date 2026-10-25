@@ -12,8 +12,8 @@ android {
         applicationId = "com.oppower"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.0.0-beta20"
+        versionCode = 22
+        versionName = "1.0.0-beta22"
     }
 
     buildTypes {

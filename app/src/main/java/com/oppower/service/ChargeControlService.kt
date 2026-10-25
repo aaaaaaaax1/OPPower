@@ -43,6 +43,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
+internal object StatusNotificationChannels {
+    const val STATUS = "charge_control"
+    const val LIVE = "battery_live_update_v2"
+}
+
 private val controlRestoreScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 class ChargeControlService : Service() {
@@ -365,7 +370,7 @@ class ChargeControlService : Service() {
         val level = battery.levelPercent.coerceIn(0, 100)
         val body = listOf(data, tier).filter { it.isNotBlank() }.joinToString("  ·  ")
         val usesLiveStyle = Build.VERSION.SDK_INT >= 36
-        val builder = Notification.Builder(this, if (usesLiveStyle) LIVE_CHANNEL_ID else CHANNEL_ID)
+        val builder = Notification.Builder(this, if (usesLiveStyle) StatusNotificationChannels.LIVE else StatusNotificationChannels.STATUS)
             // Android requires a small icon. ColorOS can replace ordinary
             .setSmallIcon(R.drawable.ic_notification_transparent)
             .setContentTitle("$power W")
@@ -424,7 +429,7 @@ class ChargeControlService : Service() {
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "充电状态", NotificationManager.IMPORTANCE_LOW).apply {
+            NotificationChannel(StatusNotificationChannels.STATUS, "充电状态", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "显示亮屏快充状态、电池功率和充电保护"
                 setShowBadge(false)
                 enableVibration(false)
@@ -436,7 +441,7 @@ class ChargeControlService : Service() {
         if (Build.VERSION.SDK_INT >= 36) {
             manager.createNotificationChannel(
                 NotificationChannel(
-                    LIVE_CHANNEL_ID,
+                    StatusNotificationChannels.LIVE,
                     "实时充电状态",
                     NotificationManager.IMPORTANCE_DEFAULT,
                 ).apply {
@@ -462,8 +467,6 @@ class ChargeControlService : Service() {
     }
 
     companion object {
-        const val CHANNEL_ID = "charge_control"
-        const val LIVE_CHANNEL_ID = "battery_live_update_v2"
         const val NOTIFICATION_ID = 2108
         const val ACTION_RESTORE_ALL = "com.oppower.action.RESTORE_ALL"
         const val ACTION_HISTORY_SETTING_CHANGED = "com.oppower.action.HISTORY_SETTING_CHANGED"

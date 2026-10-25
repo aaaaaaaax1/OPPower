@@ -189,6 +189,24 @@ class ChargingControllerTest {
     }
 
     @Test
+    fun smartChargeSwitchDisablesWhileActiveAndRestoresOnPause() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 8, smartChargeSwitch = 1)
+        val controller = ChargingController(gateway)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        controller.evaluate(enabled, battery())
+        controller.evaluate(enabled, battery())
+
+        assertEquals(listOf(0), gateway.smartChargeSwitchWrites)
+        assertEquals(0, gateway.smartChargeSwitch)
+
+        controller.evaluate(enabled.copy(masterEnabled = false), battery())
+
+        assertEquals(listOf(0, 1), gateway.smartChargeSwitchWrites)
+        assertEquals(1, gateway.smartChargeSwitch)
+    }
+
+    @Test
     fun refreshFailureDoesNotRewriteSameCalculatedTarget() {
         val gateway = FakeChargingGateway(cosa = 0, gear = 8, refreshSucceeds = false)
         val controller = ChargingController(gateway)
@@ -291,10 +309,12 @@ class ChargingControllerTest {
         var policyCategory: String = "test_scene",
         var policyChargeVal: Int? = 12,
         var policySpeedAdd: Int? = 1,
+        var smartChargeSwitch: Int = 1,
     ) : ChargingGateway {
         override val isAvailable = true
         override val hasPermission = true
         val writes = mutableListOf<Int>()
+        val smartChargeSwitchWrites = mutableListOf<Int>()
 
 
 
@@ -311,6 +331,17 @@ class ChargingControllerTest {
             assertEquals("cosa_ctc_value", name)
             writes += value
             cosa = value
+        }
+
+        override fun readSystemSetting(name: String): String {
+            assertEquals("smart_charge_switch_state", name)
+            return smartChargeSwitch.toString()
+        }
+
+        override fun putSystemSetting(name: String, value: Int) {
+            assertEquals("smart_charge_switch_state", name)
+            smartChargeSwitchWrites += value
+            smartChargeSwitch = value
         }
 
         override fun readThermalPolicy(): String {

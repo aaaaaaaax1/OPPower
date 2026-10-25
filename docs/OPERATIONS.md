@@ -42,6 +42,7 @@ OPPower 写入目标 `cosa` 后立即触发一次系统热控重算；稳定期�
 | 入口 | 已验证结果 | 使用结论 |
 | --- | --- | --- |
 | `cosa_ctc_value` | 能按基础档计算目标 gear；外值漂移后下一周期可纠正；切换目标不经过 0 | 核心控制路径，稳定保留 |
+| `smart_charge_switch_state=0` | 同条件相邻复测约增加 0.55–0.99 W，稳定但不足以单独突破功率层 | beta21 作为补充提升接入；控制期间写 0，暂停时恢复原值，不重复轮询 |
 | BatteryService `setChargingLevel` | beta9–beta15 曾用于绕过空策略；会与热控重算写回 12/15 冲突并造成跳 0 W | **beta16 已删除，禁止重新接入** |
 | `SmartChgMode=0` + 当时的 `customize=1` | 历史组合只有约 1–3 W 的小幅、不稳定收益，后期还改变了自然策略 | **beta17 已移除，禁止接入** |
 | `set_charge(0,-2)` 广播 | 接收器要求 `oplus.permission.OPLUS_COMPONENT_SAFE`，Shizuku/ADB 的 shell UID 不持有该签名权限；`Broadcast completed` 不代表送达 | **排除：不会进入 `D1()`** |
@@ -704,3 +705,83 @@ JVM 单测已通过。beta19 的安装后接电复验需确认：41°C 附近不
 `Thermal Levels` 只能读，当前权限不能写。源码中的 `setThermalControlTest`、`setTempLevel` 受 `sys.deepsleep.allow.debug` 门控；设备该属性为空，命令返回 `cmd not allow`。因此不把修改 Thermal Levels 纳入应用功能。
 
 真机初测：微信无通话悬浮窗、OPPower 前台时，热控类别为 `common_config`，基础档 5–6、`cosa=-5/-6`、计算 gear 0，策略为 `chargeVal=3, speedChargeAdd=-2`，实际功率约 22–24 W。接电后 gear 0 无需切应用即可形成并持续刷新，但该条件下没有达到 30 W。桌面/后台控制条件仍待 AC 在线时复测。JVM 单测与 Debug 构建通过，安装版本 `1.0.0-beta20`。
+
+## 24. `appCategory=game` / `category_4` 对照（2026-10-24，失败并撤销）
+
+- 测试条件：RMX8899、ColorOS 17、真实亮屏、AC 接电、OPPower 前台；SOC 68%–72%，电池温度约 41.0–41.9°C。
+- 临时把 OPPower Manifest 设置为 `android:appCategory="game"`，系统将其识别为游戏，`cmd game list-modes com.oppower` 可用，并设置为 `custom`。
+- 开启 OPPower 现有保活悬浮窗后，系统确认 `TYPE_APPLICATION_OVERLAY` 已存在；`getCurThermalPolicy` 一度返回 `categoryName: float_window_common`。
+- 单次 `oplus_float_window_show 0 → 00` 重算日志显示：`appType=-1`、`configItemName=common_config`、`float={com.oppower}`、`full={com.oppower}`，没有出现 `category_4_fw_common`，也没有 `setSmartCoolDown: cooldown = 0`。
+- 同期电池侧功率约 24.8 W（5.69 A × 4.356 V），只能归因于 gear 0 和当前策略，不能归因于 `appCategory=game`。
+- 对照测试包 `com.pi.czrxdfirst` 之所以能进入 `category_4_fw_common`，是因为它已在厂商 XML 热控名单中并被识别为 `appType=4`；普通应用只声明 `android:appCategory="game"` 不会获得这个系统分类。
+- 已撤销 Manifest 游戏分类、`cmd game reset com.oppower`、关闭保活悬浮窗测试开关、恢复 `SYSTEM_ALERT_WINDOW` 为默认、恢复 `oplus_float_window_show=0`，并重新构建安装普通版本。
+- 结论：该路径不能作为 OPPower 的稳定提速功能，不再重复测试。稳定 30 W+ 仍需找到能影响原生 `chargeVal=0, speedChargeAdd=-2` / cooldown 0 的可写策略条件。
+
+## 25. 2026-10-25 服务接口与剩余设置审计
+
+- 设备通过 `192.168.10.7:33881` 连接，RMX8899、OPPower `1.0.0-beta20`；审计时未接 AC，SOC 约 40%，电池约 37.7°C。
+- OPPower 前台时因微信悬浮窗存在，活动热控策略为 `common_config_float_window_scene_102`，基础档 5、策略 `chargeVal=4, speedChargeAdd=0`；不能把 `cosa=0` 或 gear 回读值当作实际硬件充电级。
+- `power_monitor` 的 shell 帮助虽然列出 `get/set`，但源码没有可用的功率 setter；当前实现只包含帮助、暂停控制、唤醒和子系统读取路径。`set` 还需要 `android.permission.DEVICE_POWER`，没有新增可用入口。
+- `horae` 被 Battery 与 COSA 用于注册热控回调、读取 thermal status/Thermal Levels/温度、上报屏幕/闪光灯/折叠状态；没有充电电流或 cooldown setter。shell 调用 `cmd horae` 被 SELinux 拒绝，不接入。
+- `oplus_battery_stats_service` 的 `IOplusBatteryStatsService` 只有 `getSystemServerBinderCallsStats` 与 `getUidSipper` 两个读取接口，没有充电控制面。
+- `oplus_battery_cool_charge` 只驱动 HANS 酷充事件和后台场景，不写充电环路；`oplus.thermal.low.voltage`、相机低电压、户外场景和安全模式是电压/场景降级状态，当前均已处于不额外限制的状态，继续提高这些值没有合理收益。
+- `customize_power_temperature_control_*` 是 HBM、OSIE、视频超分与流畅度的功能开关，不属于充电功率 setter。
+- `ICharger.setChargerCoolDown`、`setChgConfig`、`setPsySlowChgEnable` 等直接 HAL 入口继续受 `READ_COMMON` / `POWER` 权限限制；不绕过 SELinux、不伪装 UID。
+- 尚未完成 AC 单变量复核的只剩 `smart_charge_switch_state` 与 `smart_charge_protection_switch_state`。测试必须在同一 SOC、温度、充电器、前台包和浮窗状态下分别进行，每项观察至少 30 秒，并记录实际功率、策略 category、`chargeVal`、`speedChargeAdd` 与计算 gear。
+- 历史高功率对照进一步确认：稳定 30 W+ 的核心仍是原生策略进入 `chargeVal=0, speedChargeAdd=-2` / cooldown 0；单纯把计算 gear 写为 0、提高温度或增加 HAL 写入都不能保证达到该状态。
+
+## 26. 2026-10-25 AC 下智能充电开关 A/B
+
+设备条件：RMX8899、系统 ColorOS 17、OPPower beta20 前台、AC 10 V 充电、真实亮屏、微信与 MultiApp 微信均保持运行。测试全程保持 `speed_charge_state=3`、`single_speed_charge_state=0`、`regular_charge_protection_switch_state=0`，计算 gear 0；策略始终为 `float_window_scene_102 / gearVal=0 / chargeVal=12 / speedChargeAdd=0`。功率按电池侧 `|Battery current| × Battery voltage` 计算。
+
+| 阶段 | 主开关 | 保护开关 | 样本 | 平均功率 | 范围 | 温度 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 基线 | 1 | 1 | 30 | 25.40 W | 25.29–26.39 W | 38.1–38.4°C |
+| 主开关关闭 | 0 | 1 | 30 | 26.39 W | 26.34–26.42 W | 38.5–38.7°C |
+| 恢复主开关 | 1 | 1 | 30 | 26.13 W | 26.08–26.30 W | 38.8–39.0°C |
+| 主开关再次关闭 | 0 | 1 | 30 | 26.68 W | 26.45–26.74 W | 39.2–39.5°C |
+| 两项基线 | 1 | 1 | 30 | 26.81 W | 26.45–26.86 W | 39.5–39.8°C |
+| 保护开关关闭 | 1 | 0 | 30 | 26.48 W | 26.21–26.76 W | 39.8–40.1°C |
+
+结论：
+
+- `smart_charge_switch_state=0` 的相邻重复对照只增加约 0.55–0.99 W，且温度同步上升，不能视为突破功率层的独立入口。按用户决定，beta21 仍将它作为补充提升保留；只在控制有效时写 0，暂停时恢复原值。
+- `smart_charge_protection_switch_state=0` 反而下降约 0.33 W，策略字段不变；排除。
+- 两项已恢复为 `1`。本轮没有新增可接入的功率参数。
+
+## 27. MultiApp 微信悬浮窗差异
+
+当前 WindowManager 中，MultiApp 用户 999 的微信 `PID 18113` 持有多个 `TYPE_APPLICATION_OVERLAY` 窗口；主用户微信 `PID 14364` 和推送进程均保持运行。对主用户微信临时设置 `SYSTEM_ALERT_WINDOW=ignore` 不会移除 MultiApp 已存在的窗口，热控仍保持 `float_window_scene_102`。该 app-op 已恢复为 `allow`，微信进程未被杀死。
+
+历史高功率日志中的组合是：
+
+```text
+float={com.tencent.mm}
+full={com.oppower}
+tempGear=[1], configItemName=common_config
+chargeVal:0, speedChargeAdd:-2
+set cooldown:0
+```
+
+当前组合则是：
+
+```text
+categoryName=float_window_scene_102
+gearVal=0, chargeVal=12, speedChargeAdd=0
+```
+
+因此下一步应只移除 MultiApp 用户 999 的现存悬浮窗，保留机主用户微信进程，再触发一次热控重算并比较 category 与功率。不得通过 force-stop 机主微信、绕过 SELinux 或恢复持续 HAL 轮询来实现。
+
+## 28. beta21：补充充电开关与设置权限真值刷新（2026-10-25）
+
+- 控制有效时读取 `smart_charge_switch_state` 原值并写为 `0`；相同状态不重复写，暂停、拔电、充满、关闭总开关和服务停止时恢复原值。
+- `cosa` 仍按“热控基础档 + cosa = 目标 gear”每秒计算；没有恢复 `setChargingLevel`、`SmartChgMode`、广播或功率守门轮询。
+- 设置页改为读取 Android 真值：应用通知权限、当前通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 安装/运行/授权/服务连接状态。应用启动、从系统设置返回、通知授权回调和 Shizuku 授权回调后都会刷新。
+- beta21 已通过 JVM 单测、Debug 编译、lint（0 error）、构建和真机覆盖安装；设置页已正确显示系统通知权限与实时活动渠道。`smart_charge_switch_state=0` 的真机持续功率增益仍需在相同 SOC、温度和前台场景下复测。
+
+## 29. beta22：按 LLPower 修正电流与功率读取（2026-10-25）
+
+- 根因不是热控断充。该机 `CURRENT_NOW` 快充值在约 `-9947` 到 `-10065` 之间波动，旧 OPPower 在绝对值达到 10000 时把值除以 1000，使约 10 A 被误算成约 10 mA，功率因此显示约 0 W；回落到 9999 以下时又恢复约 38 W。
+- LLPower 实际使用 `CURRENT_NOW → CURRENT_AVERAGE → sysfs current_now/main current_now/batt_current` 的回退顺序，并且只在绝对值大于 20000 时按微安换算。
+- beta22 已按该逻辑接入，同时复制无效哨兵过滤、接近满电时整数安培异常值清理和电压 sysfs 回退。界面电流与功率使用同一电流结果。
+- 新增边界单测：`-9947`、`10009`、`10010` 均保持 mA，`10010 mA × 3.94 V = 39.44 W`；只有 20000 以上才进入微安换算。

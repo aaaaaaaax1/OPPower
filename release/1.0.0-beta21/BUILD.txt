@@ -1,0 +1,26 @@
+OPPower 1.0.0-beta21
+versionCode: 21
+versionName: 1.0.0-beta21
+Build: debug
+Built: 2026-10-25 01:23:41 +0800
+APK: OPPower-1.0.0-beta21-debug.apk
+SHA-256: B2BB405CFECFBE80EF4E8AE9AA000285AFCEB3D0FAEC58752830E920A9AC9515
+
+Changes:
+- Added automatic smart_charge_switch_state=0 while charge control is active.
+- Restores the saved smart-charge switch value when control pauses, power disconnects, charging completes, the master switch closes, or the service stops.
+- Writes the switch only when its value changes; no polling or repeated writes are added.
+- Settings now show live Android state for notification permission, notification channel, battery optimization, overlay permission and accessibility service.
+- Shizuku installation, runtime, permission and privileged-service connection states now refresh on app start/resume and authorization callbacks.
+- Main-page notification badge reports a system permission problem instead of showing a stale enabled state.
+- No setChargingLevel, SmartChgMode, set_charge broadcast, or continuous power gate was added.
+
+Validation:
+- JVM unit tests passed, including smart-charge lifecycle and system notification readiness.
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors (20 existing warnings).
+- Debug APK built successfully.
+- Debug APK installed over existing data on RMX8899 and launched successfully.
+- Notification settings showed the live values: system permission allowed and live-activity channel enabled.
+- With AC disconnected the service was stopped and smart_charge_switch_state read back as 1.
+- AC charging gain remains for device testing.
