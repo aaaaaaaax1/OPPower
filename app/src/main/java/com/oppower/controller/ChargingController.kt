@@ -168,12 +168,9 @@ class ChargingController(
 
             // The target is calculated only from the live thermal base and cosa.
             // policy.gear is deliberately ignored, including stale cached values.
-            val desiredCosa = GearCalculator.cosaForTarget(target, baseGear)
-                ?: throw IllegalStateException(
-                    "目标 gear $target 不可达：基础档=$baseGear，所需 cosa=" +
-                        (target - baseGear) +
-                        "，安全范围 ${GearCalculator.COSA_MIN}..${GearCalculator.COSA_MAX}",
-                )
+            val requiredCosa = target - baseGear
+            val targetReachable = requiredCosa in GearCalculator.COSA_MIN..GearCalculator.COSA_MAX
+            val desiredCosa = GearCalculator.clampCosaForTarget(target, baseGear)
 
             ensureSmartChargeSwitchDisabled()
 
@@ -182,7 +179,7 @@ class ChargingController(
             val wrote = if (needsApply && currentCosa != desiredCosa) writeCosa(desiredCosa) else false
             val refreshRequested = if (needsApply) requestThermalRefresh() else false
             val calculatedGear = baseGear + currentCosa
-            val verified = calculatedGear == target
+            val verified = targetReachable && calculatedGear == target
 
             lastAppliedGear = target
             lastObservedGear = calculatedGear
@@ -192,6 +189,9 @@ class ChargingController(
                 buildString {
                     append(
                         when {
+                            !targetReachable ->
+                                "目标 gear $target 不可达：所需 cosa=$requiredCosa，已使用安全下界" +
+                                    " ${GearCalculator.COSA_MIN}，当前计算档位=$calculatedGear"
                             wrote && refreshRequested ->
                                 "目标 cosa 已写入，计算档位已达到 $target，已触发一次系统重算"
                             wrote ->

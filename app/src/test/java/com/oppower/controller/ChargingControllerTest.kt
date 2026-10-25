@@ -238,15 +238,34 @@ class ChargingControllerTest {
     }
 
     @Test
-    fun unreachableTargetDoesNotWriteOutsideCosaRange() {
+    fun unreachableTargetClampsToCosaBoundaryWithoutError() {
         val gateway = FakeChargingGateway(cosa = 0, gear = 20, baseGear = 20)
         val controller = ChargingController(gateway)
 
         val status = controller.evaluate(settings(BaseTier.MAX_OUTPUT), battery())
 
-        assertEquals(ControllerPhase.ERROR, status.phase)
-        assertTrue(gateway.writes.isEmpty())
-        assertEquals(0, gateway.refreshRequests)
+        assertEquals(ControllerPhase.ACTIVE, status.phase)
+        assertEquals(listOf(-10), gateway.writes)
+        assertEquals(1, gateway.refreshRequests)
+        assertEquals(-10, status.appliedCosa)
+        assertEquals(10, status.calculatedGear)
+        assertFalse(status.verified)
+        assertTrue(status.message.contains("目标 gear 0 不可达"))
+    }
+
+    @Test
+    fun baseGearTenWritesMinusTenAndReachesGearZero() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 10, baseGear = 10)
+        val controller = ChargingController(gateway)
+
+        val status = controller.evaluate(settings(BaseTier.MAX_OUTPUT), battery())
+
+        assertEquals(ControllerPhase.ACTIVE, status.phase)
+        assertEquals(listOf(-10), gateway.writes)
+        assertEquals(-10, status.appliedCosa)
+        assertEquals(0, status.calculatedGear)
+        assertTrue(status.verified)
+        assertTrue(status.message.contains("计算档位已达到 0"))
     }
 
     @Test

@@ -38,7 +38,7 @@ beta21 在控制有效期间读取并保存 `smart_charge_switch_state` 原值�
 
 beta22 将电池电流读取顺序与 LLPower 对齐：先 `CURRENT_NOW`，再 `CURRENT_AVERAGE`，最后尝试 `/sys/class/power_supply/.../current_now` 等节点；无效哨兵归零，只有绝对值大于 20000 时才按微安换算。该机快充时 `CURRENT_NOW` 约为 `±9,500..±10,100` mA，旧实现的 10000 阈值会把越过阈值的一帧错误除以 1000，导致界面在约 38 W 和 0 W 之间跳动。功率由同一电流与电池电压直接计算，电流和功率使用同一修正结果。
 
-`cosa_ctc_value` 的可用范围为 `-9..9`。`-10` 以下会进入策略无效哨兵，控制器禁止写入。若目标在安全范围内不可达，界面明确显示基础档和所需 `cosa`，控制器不越界写入。
+`cosa_ctc_value` 的可用范围从 beta23 起为 `-10..9`。基础档为 10、目标 gear 为 0 时写入 `-10`；基础档继续高于 10 时目标不可达，控制器保持在 `-10` 安全下界并明确显示实际计算档位。历史版本曾把 `-10` 视为无效哨兵，beta23 按当前设备实测需求调整下界；`-11` 及以下仍禁止写入。
 
 RMX8899 的下表只记录“基础档为 8、场景其他影响当时为 0”时的历史条件样例。控制实现不使用该表中的固定映射：
 
@@ -51,7 +51,8 @@ RMX8899 的下表只记录“基础档为 8、场景其他影响当时为 0”�
 | `-7` | 2 | 9 | 更高 |
 | `-8` | 1 | 9 | 接近最高输出 |
 | `-9` | 0 | 12 | 实测约 15–30 W，跨应用保持 |
-| `-10` 及以下 | 0 | -2 | 无效哨兵，禁止使用 |
+| `-10` | 0 | -2 | beta23 用于基础档 10 时保持 gear 0；历史观测值仍是无效哨兵，需继续真机确认 |
+| `-11` 及以下 | 0 | -2 | 无效哨兵，禁止使用 |
 
 例如基础档为 6、目标为 0 时，所需 `cosa=-6`，计算结果也是 gear 0。基础档变成 7 后，目标仍为 0 时立即改为 `cosa=-7`。
 
@@ -181,7 +182,7 @@ T ≥ T2                        → 温度条件 2 的目标
 
 ```text
 settings get global cosa_ctc_value
-settings put global cosa_ctc_value -9…9
+settings put global cosa_ctc_value -10…9
 settings get system oplus_camera_3rd_activity
 settings put system oplus_camera_3rd_activity 0|1|00|01
 dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy

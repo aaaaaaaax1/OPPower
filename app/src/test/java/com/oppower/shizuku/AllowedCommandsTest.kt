@@ -11,6 +11,7 @@ class AllowedCommandsTest {
     fun acceptsOnlyExpectedSettingsCommands() {
         assertTrue(AllowedCommands.matches("settings get global cosa_ctc_value"))
         assertTrue(AllowedCommands.matches("settings put global cosa_ctc_value -9"))
+        assertTrue(AllowedCommands.matches("settings put global cosa_ctc_value -10"))
         assertTrue(AllowedCommands.matches("settings get system oplus_camera_3rd_activity"))
         assertTrue(AllowedCommands.matches("settings get system oplus_float_window_show"))
         assertTrue(AllowedCommands.matches("settings get system smart_charge_switch_state"))
@@ -38,6 +39,8 @@ class AllowedCommandsTest {
     @Test
     fun rejectsShellInjectionAndUnknownSettings() {
         assertFalse(AllowedCommands.matches("am broadcast -a oplus.intent.action.ACTION_THERMAL_CONTROL_USER_SYSTEM -p com.oplus.battery --es name set_charge --ei level 0 --ei speedChargeAdd -2 --es foregroundPkgName com.oppower"))
+        assertFalse(AllowedCommands.matches("settings put global cosa_ctc_value -11"))
+        assertFalse(AllowedCommands.matches("settings put global cosa_ctc_value 10"))
         assertFalse(AllowedCommands.matches("settings put global cosa_ctc_value 0; reboot"))
         assertFalse(AllowedCommands.matches("settings put global another_value 1"))
         assertFalse(AllowedCommands.matches("settings put system single_speed_charge_state 2"))

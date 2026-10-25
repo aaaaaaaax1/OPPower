@@ -1,0 +1,23 @@
+OPPower 1.0.0-beta23
+versionCode: 23
+versionName: 1.0.0-beta23
+Build: debug
+Built: 2026-10-25 14:39:23 +0800
+APK: OPPower-1.0.0-beta23-debug.apk
+SHA-256: AF1F54BCCE811D620FD207E6644180387E1C7594914C16F0E8EB3636AB417D51
+
+Changes:
+- Extended cosa_ctc_value lower bound from -9 to -10.
+- Base thermal gear 10 now writes cosa=-10 and reaches calculated gear 0.
+- Target gear 0 is no longer changed to gear 1 or reported as a controller error at base 10.
+- Base gear above 10 clamps at the legal -10 boundary and reports the target as temporarily unreachable.
+- Kept the LLPower-compatible current/power normalization and 20000 threshold from beta22.
+- Added controller and calculator tests for base gear 10 and the safe clamp above 10.
+
+Validation:
+- 42 JVM unit tests passed.
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors.
+- Debug APK built successfully.
+- Debug APK installed on RMX8899.
+- Real-device base-10 write is pending the next AC/basic-gear-10 observation.

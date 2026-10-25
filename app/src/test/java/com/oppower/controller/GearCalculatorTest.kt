@@ -23,4 +23,12 @@ class GearCalculatorTest {
         assertEquals(listOf(7, 8), status.levels)
     }
 
+    @Test
+    fun clampsUnreachableTargetToSafeCosaBoundary() {
+        assertEquals(-10, GearCalculator.cosaForTarget(targetGear = 0, baseGear = 10))
+        assertNull(GearCalculator.cosaForTarget(targetGear = 0, baseGear = 11))
+        assertEquals(-10, GearCalculator.clampCosaForTarget(targetGear = 0, baseGear = 11))
+        assertEquals(-8, GearCalculator.clampCosaForTarget(targetGear = 0, baseGear = 8))
+    }
+
 }

@@ -22,7 +22,7 @@ data class ResolvedGear(
  * whether the target was reached.
  */
 object GearCalculator {
-    const val COSA_MIN = -9
+    const val COSA_MIN = -10
     const val COSA_MAX = 9
     fun parseThermalStatus(raw: String): ThermalStatus {
         val levels = Regex("Thermal Levels = \\[([^]]*)]")
@@ -55,6 +55,9 @@ object GearCalculator {
         val required = targetGear - baseGear
         return required.takeIf { it in COSA_MIN..COSA_MAX }
     }
+
+    fun clampCosaForTarget(targetGear: Int, baseGear: Int): Int =
+        (targetGear - baseGear).coerceIn(COSA_MIN, COSA_MAX)
 
     fun resolve(
         policy: ThermalPolicy,
