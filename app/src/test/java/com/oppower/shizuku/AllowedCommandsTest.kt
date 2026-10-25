@@ -27,13 +27,42 @@ class AllowedCommandsTest {
     }
 
     @Test
+    fun privilegedBatteryDumpUsesCurrentAndVoltageFromOneSample() {
+        val dump = """
+            Current OPLUS Battery Service state:
+              Charger voltage : 19
+              Battery current : 493
+            Current Battery Service state:
+              AC powered: true
+              voltage: 3978
+              temperature: 405
+        """.trimIndent()
+
+        assertEquals(
+            com.oppower.battery.PrivilegedBatteryReading(currentMa = 493, voltageMv = 3_978),
+            parsePrivilegedBatteryDump(dump),
+        )
+    }
+
+    @Test
+    fun privilegedBatteryDumpRequiresAnActualCurrentField() {
+        assertNull(parsePrivilegedBatteryDump("voltage: 3978"))
+        assertEquals(
+            com.oppower.battery.PrivilegedBatteryReading(currentMa = 0, voltageMv = 0),
+            parsePrivilegedBatteryDump("Battery current : 0"),
+        )
+    }
+
+    @Test
     fun thermalRefreshAliasKeepsTheSameIntegerValue() {
         mapOf("0" to "00", "00" to "0", "1" to "01", "01" to "1").forEach { (source, alias) ->
+            val write = thermalRefreshWrite(source)
             assertEquals(source.toInt(), alias.toInt())
-            assertEquals(alias, thermalRefreshAlias(source))
+            assertEquals(ThermalRefreshWrite(alias, source.toInt()), write)
         }
-        assertNull(thermalRefreshAlias("2"))
-        assertNull(thermalRefreshAlias("null"))
+        assertEquals(ThermalRefreshWrite("0", 0), thermalRefreshWrite("null"))
+        assertNull(thermalRefreshWrite("2"))
+        assertNull(thermalRefreshWrite(""))
     }
 
     @Test

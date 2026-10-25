@@ -24,8 +24,31 @@ interface ChargingGateway {
     fun requestThermalPolicyRefresh(): Boolean
 }
 
+interface ChargingControlStateStore {
+    fun loadOriginalSmartChargeSwitch(): Int?
+    fun saveOriginalSmartChargeSwitch(value: Int): Boolean
+    fun clearOriginalSmartChargeSwitch(): Boolean
+}
+
+class InMemoryChargingControlStateStore : ChargingControlStateStore {
+    private var originalSmartChargeSwitch: Int? = null
+
+    override fun loadOriginalSmartChargeSwitch(): Int? = originalSmartChargeSwitch
+
+    override fun saveOriginalSmartChargeSwitch(value: Int): Boolean {
+        originalSmartChargeSwitch = value
+        return true
+    }
+
+    override fun clearOriginalSmartChargeSwitch(): Boolean {
+        originalSmartChargeSwitch = null
+        return true
+    }
+}
+
 class ChargingController(
     private val shizuku: ChargingGateway,
+    private val controlState: ChargingControlStateStore = InMemoryChargingControlStateStore(),
     private val rules: RuleEngine = RuleEngine(),
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
@@ -354,9 +377,19 @@ class ChargingController(
 
     private fun ensureSmartChargeSwitchDisabled() {
         if (originalSmartChargeSwitch == null) {
-            originalSmartChargeSwitch = runCatching {
+            val remembered = runCatching {
+                controlState.loadOriginalSmartChargeSwitch()
+            }.getOrNull()?.takeIf { it == 0 || it == 1 }
+            val original = remembered ?: runCatching {
                 shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
-            }.getOrNull() ?: return
+            }.getOrNull()?.takeIf { it == 0 || it == 1 } ?: return
+            if (remembered == null && !runCatching {
+                    controlState.saveOriginalSmartChargeSwitch(original)
+                }.getOrDefault(false)
+            ) {
+                return
+            }
+            originalSmartChargeSwitch = original
         }
         val current = runCatching {
             shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
@@ -370,19 +403,30 @@ class ChargingController(
     }
 
     private fun restoreSmartChargeSwitch() {
-        val original = originalSmartChargeSwitch ?: return
+        // A recreated service may first observe an unplugged charger or a
+        // disabled master switch. Reload the original value from persistent
+        // state instead of depending on an earlier active control cycle to
+        // populate the in-memory field.
+        val original = originalSmartChargeSwitch ?: runCatching {
+            controlState.loadOriginalSmartChargeSwitch()
+        }.getOrNull()?.takeIf { it == 0 || it == 1 } ?: return
+        originalSmartChargeSwitch = original
         val current = runCatching {
             shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
         }.getOrNull() ?: return
         if (current == original) {
             originalSmartChargeSwitch = null
+            runCatching { controlState.clearOriginalSmartChargeSwitch() }
             return
         }
         val restored = runCatching {
             shizuku.putSystemSetting(SMART_CHARGE_SWITCH, original)
             shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull() == original
         }.getOrDefault(false)
-        if (restored) originalSmartChargeSwitch = null
+        if (restored) {
+            originalSmartChargeSwitch = null
+            runCatching { controlState.clearOriginalSmartChargeSwitch() }
+        }
     }
 
     private fun restoreOffset() {

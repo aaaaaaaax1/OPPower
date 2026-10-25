@@ -34,7 +34,8 @@ class RuleEngine {
             return RuleDecision(tier, null, "温度达到暂停阈值")
         }
         val gear = targetGear(settings, tier, temperatureC)
-        return RuleDecision(tier, gear, "${tier.label} · 温度适配")
+        val reason = if (tier == ControlTier.MAX_OUTPUT) { "最大输出 · 持续 gear 0" } else { "${tier.label} · 温度适配" }
+        return RuleDecision(tier, gear, reason)
     }
 
     fun resolveTier(settings: RuntimeSettings, temperatureC: Float): ControlTier {
@@ -84,11 +85,7 @@ class RuleEngine {
         }
 
     fun defaultTemperatureRules(baseTier: BaseTier): List<TierRule> = when (baseTier) {
-        BaseTier.MAX_OUTPUT -> listOf(
-            TierRule(41f, ControlTier.HIGH),
-            TierRule(42f, ControlTier.GENTLE),
-            TierRule(43f, ControlTier.PAUSED),
-        )
+        BaseTier.MAX_OUTPUT -> emptyList()
         BaseTier.HIGH, BaseTier.GENTLE -> listOf(
             TierRule(43f, ControlTier.PAUSED),
         )

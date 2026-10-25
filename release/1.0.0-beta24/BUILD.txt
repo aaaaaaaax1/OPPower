@@ -1,0 +1,24 @@
+OPPower 1.0.0-beta24
+versionCode: 24
+versionName: 1.0.0-beta24
+Build: debug
+Built: 2026-10-25 17:51:46 +08:00
+APK: OPPower-1.0.0-beta24-debug.apk
+SHA-256: FACE8FD9C6BB5ACBA097CFC7AAD4ED4F9488780836394FAFEB056D328C617DC0
+
+Changes:
+- Maximum output now keeps target gear 0 without OPPower-side 41/42/43 C tier changes.
+- Native ColorOS thermal control remains active and may change the base thermal gear.
+- Controller recalculates cosa immediately when the base gear changes, without switching apps.
+- Base gear 10 writes cosa=-10 and reaches calculated gear 0.
+- Base gear above 10 clamps at the legal -10 boundary and reports target gear 0 as temporarily unreachable.
+- Updated default-rule UI copy, design notes, operations records, and validation notes.
+
+Validation:
+- 42 JVM unit tests passed.
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors (20 warnings).
+- Debug APK built successfully.
+- Debug APK installed on RMX8899 at 192.168.10.7:33881; versionCode=24, versionName=1.0.0-beta24.
+- Real-device automatic cosa=-10 write was observed without switching apps.
+- Stable 30 W+ charging was not achieved in the recorded beta24 read-only sample.

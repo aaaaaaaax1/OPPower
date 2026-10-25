@@ -32,7 +32,7 @@
 
 OPPower 每秒重新计算目标。基础档或外部 `cosa` 变化时，只写一次新的 `cosa` 并触发一次热控重算，不先经过 `cosa=0`。
 
-OPPower 写入目标 `cosa` 后立即触发一次系统热控重算；稳定期间不重写。目标 gear 只改变系统热控的计算输入，最终 `chargeVal/cooldown` 仍由当前场景策略决定。
+OPPower 写入目标 `cosa` 后立即触发一次系统热控重算；稳定期间不重写。优先把 `oplus_float_window_show` 的同一整数切换成等价写法，`0/1/00/01` 均保持原语义；该设置缺失（`null`）时写一次规范值 `0`，因为系统只把整数 `1` 当作浮窗场景，`null` 与 `0` 都表示非浮窗。目标 gear 只改变系统热控的计算输入，最终 `chargeVal/cooldown` 仍由当前场景策略决定。
 
 暂停、关闭总开关、拔电、SOC 暂停或充满时，只恢复 `cosa=0` 并触发一次热控重算；不再发送原生安全 level。
 
@@ -574,7 +574,7 @@ beta15 将后续控制改为状态事件驱动，不再把温度当成升功率�
 - 系统策略 category 变化并重新变成受限状态时，允许一次额外的 native 复协商。
 - 每个稳定目标最多执行一次 category 复协商；场景来回变化也不会持续重发。
 - native 调用即使失败也记录为已尝试，避免每秒重试造成 Binder/HAL 负载和额外发热。
-- 温度继续只用于 41/42/43°C 等安全降档和暂停；温度上升不会提高目标 gear。
+- 20–40 W 和 10–30 W 默认仍以 43°C 作为安全暂停；最大输出自 beta24 起不再执行 OPPower 自身的 41/42/43°C 分档。温度上升永远不会提高目标 gear。
 - `cosa` 仍每秒读取，实时基础档变化时立即重算并触发一次 `m2()`。
 ## 18. 可写充电参数筛选（2026-10-24）
 
@@ -774,7 +774,7 @@ gearVal=0, chargeVal=12, speedChargeAdd=0
 
 ## 28. beta21：补充充电开关与设置权限真值刷新（2026-10-25）
 
-- 控制有效时读取 `smart_charge_switch_state` 原值并写为 `0`；相同状态不重复写，暂停、拔电、充满、关闭总开关和服务停止时恢复原值。
+- 控制有效时读取 `smart_charge_switch_state` 原值并写为 `0`；相同状态不重复写，暂停、拔电、充满和关闭总开关时恢复原值。原值同步写入 SharedPreferences，服务重建后即使第一轮先遇到拔电，也能完成恢复。
 - `cosa` 仍按“热控基础档 + cosa = 目标 gear”每秒计算；没有恢复 `setChargingLevel`、`SmartChgMode`、广播或功率守门轮询。
 - 设置页改为读取 Android 真值：应用通知权限、当前通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 安装/运行/授权/服务连接状态。应用启动、从系统设置返回、通知授权回调和 Shizuku 授权回调后都会刷新。
 - beta21 已通过 JVM 单测、Debug 编译、lint（0 error）、构建和真机覆盖安装；设置页已正确显示系统通知权限与实时活动渠道。`smart_charge_switch_state=0` 的真机持续功率增益仍需在相同 SOC、温度和前台场景下复测。
@@ -792,3 +792,28 @@ gearVal=0, chargeVal=12, speedChargeAdd=0
 - 用户明确要求基础档 10 时继续保持 gear 0，因此 beta23 将 `cosa_ctc_value` 下界扩到 `-10`，目标 gear 0 时直接写 `-10`，得到真实计算 gear 0。
 - `-10` 曾在早期历史记录中表现为无效策略哨兵；beta23 将其作为当前设备的定向补偿值使用，后续真机继续核对 `chargeVal`、功率和实际充电，不再自动写成 gear 1 作为保护。
 - 基础档高于 10 时仍禁止写 `-11` 及以下；控制器保持合法下界并明确显示目标不可达，待基础档回落自动重新达到 gear 0。
+
+## 31. beta24：最大输出持续 gear 0 与基础档 11 边界（2026-10-25）
+
+- 真机条件：RMX8899、ColorOS 17、AC 在线、物理解锁、真实亮屏、OPPower 前台，未切换应用；SOC 72%，电池温度约 42.8–43.2°C。
+- 系统 `Thermal Levels[0]` 从 10 升到 11。beta24 已自动写并持续回读 `cosa_ctc_value=-10`，无需应用切换；计算 gear 为 `11 + (-10) = 1`。`-10` 是当前合法下界，不能用 `-11` 强行补到 gear 0。
+- 最大输出默认不执行 OPPower 自身的 41/42/43°C 分档。40.0–45.8°C 的规则单测都返回 gear 0；80% 电量暂停、100%/FULL 暂停、20–40 W 与 10–30 W 的 43°C 安全暂停继续保留，自定义规则仍可显式改变目标。
+- 2026-10-25 17:46:58–17:48:22 的 27 行只读采样中，`getCurThermalPolicy` 一直为 `null`，不能据此判断系统热控失效；同期电池侧约 2–6 W，之后另一次连续观察涨到约 21.9–23.6 W，仍未稳定达到 30 W+。
+- 当前 `dumpsys battery` 同时报告 `Max charging current: 2000000`、约 4.82 V 充电电压和约 1.4 A 电池电流。这个 2 A 字段已读到，但尚未证明存在普通 shell/Shizuku 可持久修改且能改变实际协商的入口；不能把它当成可由 OPPower 强行放宽的保证。
+- 下一轮只做单变量只读/短时 A/B：记录 SOC、温度、前台包、浮窗状态、充电器协商电压/电流、`Thermal Levels`、`cosa`、实际功率；优先比较同一条件下系统自然策略与当前 gear 1 的结果，禁止持续 `setChargingLevel`、低频守门、人为升温或关闭原生热保护。
+- beta24 发布包：`release/1.0.0-beta24/OPPower-1.0.0-beta24-debug.apk`；SHA-256 `FACE8FD9C6BB5ACBA097CFC7AAD4ED4F9488780836394FAFEB056D328C617DC0`。42 项 JVM 单测、Debug 编译、lint（0 error，20 warning）和构建通过，已覆盖安装到 RMX8899。
+## 32. beta25：伪零电流的后备采样（2026-10-25）
+
+- 真机历史库确认 `CURRENT_NOW=0` 会在 AC 在线时连续出现 3–30 秒，虽实际仍充电；LLPower 同条件正常，说明应修复应用采样链，而不是继续改 gear 或重复写充电参数。
+- AC 在线、SOC `<99`、状态不是 FULL，且主电流为 0 或电压无效时，页面与控制服务才会调用 `readBatteryFallback()`；它固定执行一次只读 `dumpsys battery`，将 `Battery current` 和 `voltage` 作为同一帧返回。
+- 后备值必须非 0、未命中无效哨兵且绝对值不超过 20000 mA；电压有效范围为 3000–5500 mV。后备失败时保留真实主采样，禁止沿用旧帧。接近充满或已 FULL 时不做后备，避免把充满后的正常 0 当成异常。
+- 下一轮测试应先接电并保持最大输出，同时打开 OPPower 与 LLPower：记录至少 120 秒，确认 OPPower 不再出现连续 `0 W` 而 LLPower 正常；另在拔电、SOC 98% 以上和有充电器协商切换时确认后备不会产生虚假高功率。
+- 本轮没有发送任何充电写入；`setChargingLevel`、`set_charge`、`SmartChgMode`、`customize_charge_switch_state`、守门轮询、人为升温均继续禁用，通知与黄色闪电标不改。
+## 33. beta26：后台控制保持与偶发零值纠错（2026-10-25）
+
+- beta25 真机测试出现 OPPower 在后台一段时间后功率下降、切回前台随即恢复。代码复核发现 `ChargeControlService.onDestroy()` 会无条件恢复 `cosa` 和 `smart_charge_switch_state`；系统在后台重建前台服务时，这次生命周期回调会把仍有效的 gear 0 控制撤销。
+- beta26 取消“服务销毁即恢复默认”的副作用。系统驱动的服务销毁只停止当前采样循环，不撤销已持久保存的控制意图；`START_STICKY` 重建后重新绑定 Shizuku，并继续依据实时基础档把 `cosa` 算回目标值。总开关关闭、拔电、SOC 暂停、充满和用户执行“一键恢复”仍会走显式恢复路径。
+- 新增服务创建、启动、销毁日志，便于 logcat 区分“系统停止/重建服务”和“控制循环仍运行但采样值异常”。日志包含 action 与计算结果，不改变通知、流体云、黄色闪电图标或充电写入范围。
+- 功率读取保留 LLPower 的两条只读路径：属性与 sysfs 优先，均无有效值时再执行一次固定 `dumpsys battery`。若 AC 在线且未充满，而所有通道瞬间都返回零，最多复用 3.5 秒最近一帧可靠电流与电压；超过、拔电或充满后立即接受零值。正常非零变化仍按 1 秒刷新，不做防抖或平滑。
+- 本轮继续禁用 `setChargingLevel`、`set_charge(0,-2)`、`SmartChgMode`、`customize_charge_switch_state` 和守门轮询；不修改系统热保护，不操作微信。
+- 真机验收应在同一充电器、同一 SOC 与温度下保持 OPPower 后台至少 3 分钟，同时用 LLPower 对照功率；若 logcat 出现 `ChargeControlService destroyed; persisted control intent retained`，确认 `created/started` 重建后 `cosa` 自动恢复而无需切前台。

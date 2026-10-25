@@ -3,6 +3,7 @@ package com.oppower.shizuku
 import android.content.Context
 import android.os.RemoteException
 import androidx.annotation.Keep
+import com.oppower.battery.PrivilegedBatteryReading
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
@@ -19,6 +20,18 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
     }
 
     @Throws(RemoteException::class)
+    override fun readBatteryFallback(): IntArray {
+        return runCatching {
+            val dump = runShell(BATTERY_DUMP_COMMAND, BATTERY_DUMP_TIMEOUT_MILLIS)
+            val reading = parsePrivilegedBatteryDump(dump)
+                ?: error("Battery current is unavailable")
+            intArrayOf(reading.currentMa, reading.voltageMv)
+        }.getOrElse { error ->
+            throw RemoteException("OPPower battery fallback failed: ${error.message.orEmpty()}")
+        }
+    }
+
+    @Throws(RemoteException::class)
     override fun execute(command: String): String {
         if (!AllowedCommands.matches(command)) {
             throw SecurityException("OPPower command is not allowlisted")
@@ -31,11 +44,14 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
             }
     }
 
-    private fun runShell(command: String): String {
+    private fun runShell(
+        command: String,
+        timeoutMillis: Long = COMMAND_TIMEOUT_MILLIS,
+    ): String {
         val process = ProcessBuilder("/system/bin/sh", "-c", command)
             .redirectErrorStream(true)
             .start()
-        if (!process.waitFor(8, TimeUnit.SECONDS)) {
+        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()
             error("Command timed out")
         }
@@ -45,7 +61,33 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
         if (process.exitValue() != 0) error(output.ifBlank { "Command failed" })
         return output
     }
+    private companion object {
+        const val BATTERY_DUMP_COMMAND = "dumpsys battery"
+        const val BATTERY_DUMP_TIMEOUT_MILLIS = 1_500L
+        const val COMMAND_TIMEOUT_MILLIS = 8_000L
+    }
 }
+
+internal fun parsePrivilegedBatteryDump(output: String): PrivilegedBatteryReading? {
+    val currentMa = BATTERY_CURRENT_PATTERN.find(output)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+        ?: return null
+    val voltageMv = BATTERY_VOLTAGE_PATTERN.find(output)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+        ?: 0
+    return PrivilegedBatteryReading(currentMa, voltageMv)
+}
+
+private val BATTERY_CURRENT_PATTERN = Regex(
+    pattern = """(?im)^\s*Battery current\s*:\s*(-?\d+)\s*$""",
+)
+private val BATTERY_VOLTAGE_PATTERN = Regex(
+    pattern = """(?im)^\s*voltage\s*:\s*(\d+)\s*$""",
+)
 
 internal object AllowedCommands {
     private val exact = setOf(

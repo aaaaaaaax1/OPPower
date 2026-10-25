@@ -6,6 +6,7 @@ import com.oppower.model.ControllerPhase
 import com.oppower.model.RuntimeSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -207,6 +208,62 @@ class ChargingControllerTest {
     }
 
     @Test
+    fun smartChargeOriginalSurvivesServiceControllerRecreation() {
+        val state = FakeChargingControlStateStore()
+        val firstGateway = FakeChargingGateway(cosa = 0, gear = 8, smartChargeSwitch = 1)
+        val firstController = ChargingController(firstGateway, state)
+        val enabled = settings(BaseTier.MAX_OUTPUT)
+
+        firstController.evaluate(enabled, battery())
+
+        assertEquals(1, state.originalSmartChargeSwitch)
+        assertEquals(0, firstGateway.smartChargeSwitch)
+
+        val restartedGateway = FakeChargingGateway(
+            cosa = -8,
+            gear = 8,
+            smartChargeSwitch = 0,
+        )
+        val restartedController = ChargingController(restartedGateway, state)
+
+        restartedController.evaluate(enabled, battery())
+
+        assertEquals(1, state.originalSmartChargeSwitch)
+        assertTrue(restartedGateway.smartChargeSwitchWrites.isEmpty())
+
+        restartedController.evaluate(
+            enabled,
+            battery().copy(acOnline = false, status = 3),
+        )
+
+        assertEquals(listOf(1), restartedGateway.smartChargeSwitchWrites)
+        assertEquals(1, restartedGateway.smartChargeSwitch)
+        assertNull(state.originalSmartChargeSwitch)
+    }
+
+    @Test
+    fun persistedSmartChargeOriginalRestoresWhenRecreatedControllerFirstSeesDisconnect() {
+        val state = FakeChargingControlStateStore().apply {
+            originalSmartChargeSwitch = 1
+        }
+        val gateway = FakeChargingGateway(
+            cosa = -8,
+            gear = 8,
+            smartChargeSwitch = 0,
+        )
+        val controller = ChargingController(gateway, state)
+
+        controller.evaluate(
+            settings(BaseTier.MAX_OUTPUT),
+            battery().copy(acOnline = false, status = 3),
+        )
+
+        assertEquals(listOf(1), gateway.smartChargeSwitchWrites)
+        assertEquals(1, gateway.smartChargeSwitch)
+        assertNull(state.originalSmartChargeSwitch)
+    }
+
+    @Test
     fun refreshFailureDoesNotRewriteSameCalculatedTarget() {
         val gateway = FakeChargingGateway(cosa = 0, gear = 8, refreshSucceeds = false)
         val controller = ChargingController(gateway)
@@ -374,6 +431,22 @@ class ChargingControllerTest {
         override fun requestThermalPolicyRefresh(): Boolean {
             refreshRequests += 1
             return refreshSucceeds
+        }
+    }
+
+    private class FakeChargingControlStateStore : ChargingControlStateStore {
+        var originalSmartChargeSwitch: Int? = null
+
+        override fun loadOriginalSmartChargeSwitch(): Int? = originalSmartChargeSwitch
+
+        override fun saveOriginalSmartChargeSwitch(value: Int): Boolean {
+            originalSmartChargeSwitch = value
+            return true
+        }
+
+        override fun clearOriginalSmartChargeSwitch(): Boolean {
+            originalSmartChargeSwitch = null
+            return true
         }
     }
 }

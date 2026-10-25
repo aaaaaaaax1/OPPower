@@ -1,0 +1,21 @@
+OPPower 1.0.0-beta25
+versionCode: 25
+versionName: 1.0.0-beta25
+Build: debug
+Built: 2026-10-25 19:09:25 +08:00
+APK: OPPower-1.0.0-beta25-debug.apk
+SHA-256: 2604B29948D832C611068F88C1A1748D977B8C162F59DECA06698D4F0698FE95
+
+Changes:
+- Fixed transient AC charging readings of 0 W / 0 mA caused by BatteryManager.CURRENT_NOW returning 0.
+- On AC, SOC below 99% and a non-FULL state, invalid voltage or current triggers one bounded read-only dumpsys battery fallback.
+- Fallback current and voltage are parsed from the same sample and used together; missing, zero, sentinel or implausible values never reuse stale or fabricated power.
+- Added a fixed Shizuku fallback command with a 1.5 s service timeout and a 350 ms bind wait, while keeping sampling work off the main thread.
+- Notification, fluid cloud, yellow charging icon, WeChat handling and charging control behavior were not changed.
+
+Validation:
+- 47 JVM unit tests passed (0 failures, 0 errors, 0 skipped).
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors (20 warnings).
+- Debug APK built and archived successfully.
+- Real-device 120 s AC comparison against LLPower is still pending because the phone was not on AC power during the final check.

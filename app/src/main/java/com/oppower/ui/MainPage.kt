@@ -664,7 +664,7 @@ private fun defaultSummary(settings: RuntimeSettings): String {
     return if (settings.customRulesEnabled) {
         "自定义：${settings.customRules.temperatureRules.size} 个温度条件 · ${settings.customRules.socRules.size} 个电量条件"
     } else when (settings.baseTier) {
-        com.oppower.model.BaseTier.MAX_OUTPUT -> "41°C→20–40W · 42°C→10–30W · 43°C/80%暂停 · 充满暂停"
+        com.oppower.model.BaseTier.MAX_OUTPUT -> "保持 gear 0 · 80%暂停 · 充满暂停 · 系统热控继续生效"
         else -> "低于 43°C 随温度调整 · 43°C/80%暂停 · 充满暂停"
     }
 }

@@ -2,7 +2,7 @@
 
 ## 1. 产品目标
 
-OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，通过 Shizuku 写入系统持久设置 `cosa_ctc_value`，把 OPPower 按热控基础档与 `cosa` 计算的 gear 调整到目标档位。总开关开启后，用户划掉界面，前台服务仍继续控制；拔电、关闭开关、服务停止或达到安全阈值时恢复系统默认。
+OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，通过 Shizuku 写入系统持久设置 `cosa_ctc_value`，把 OPPower 按热控基础档与 `cosa` 计算的 gear 调整到目标档位。总开关开启后，用户划掉界面或把应用放到后台，前台服务仍继续控制；拔电、关闭开关或达到安全阈值时恢复系统默认。
 
 成功标准是外接功率计显示持续且可复现的功率，不使用单次冲高、LV 循环补发、冻结 Athena/Battery、分屏、旁路充电、伪造温度或停用原生热保护。
 
@@ -30,15 +30,20 @@ Beta17 起，OPPower 不再读取或写入 GuardElf `SmartChgMode`。beta8 在�
 
 界面显示 `基础档 + cosa = 计算档位`，并单独显示 `chargeVal`。`cosa` 回读成功且计算结果等于目标后即标记达到目标。
 
-写入 `cosa` 后触发一次系统热控重算。优先监听 `oplus_float_window_show`：其回调调用 `m.j2(null, 0ms)`，立即提交策略重算。OPPower 只把该设置的同一整数改成等价字符串写法（`0 ↔ 00`、`1 ↔ 01`）来触发监听，数值保持不变。若该值不可用，才回退到 `oplus_camera_3rd_activity`；相机回调最终调用 `m.m2()`，内部约 5 秒后计算。两条路径都只触发一次，不在应用侧等待。
+写入 `cosa` 后触发一次系统热控重算。优先监听 `oplus_float_window_show`：其回调调用 `m.j2(null, 0ms)`，立即提交策略重算。OPPower 把该设置的同一整数改成等价字符串写法（`0 ↔ 00`、`1 ↔ 01`）来触发监听，数值保持不变。Provider 没有该行时读取结果为 `null`；系统只把整数 `1` 当作浮窗场景，`null` 和 `0` 都是非浮窗状态，因此控制器把 `null` 规范化为 `0`，既保持策略语义，也能触发同一条即时回调。若即时入口不可用，才回退到 `oplus_camera_3rd_activity`；相机回调最终调用 `m.m2()`，内部约 5 秒后计算。两条路径都只触发一次，不在应用侧等待。
 
 beta20 起取消自动 gear 1 保护。目标为 gear 0 时，控制器始终按“基础档 + cosa = 0”立即下发并刷新，不因温度自动改写目标。电池功率使用与 LLPower 相同的 `BatteryManager.getLongProperty(CURRENT_NOW)`，仅当它返回 0 时回退到 `CURRENT_AVERAGE`。页面 1 秒采样与历史数据库写入分离，单次采样或写库异常不会终止刷新循环。
 
-beta21 在控制有效期间读取并保存 `smart_charge_switch_state` 原值，控制生效时把它写为 `0`，暂停、拔电、充满、关闭总开关或服务停止时恢复原值；稳定运行期间不重复写入。该参数只作为补充提升，不能替代 `cosa` 闭环，也不能据此宣称能达到固定 30 W。设置页的系统通知权限、通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 连接状态统一从 Android 与 Shizuku 实时读取，并在启动、恢复前台和授权回调后刷新，不再依赖界面缓存。
+beta21 在控制有效期间读取并保存 `smart_charge_switch_state` 原值，控制生效时把它写为 `0`，暂停、拔电、充满或关闭总开关时恢复原值；原值另存于 SharedPreferences，因此服务被系统销毁并重建后仍能恢复。稳定运行期间不重复写入。该参数只作为补充提升，不能替代 `cosa` 闭环，也不能据此宣称能达到固定 30 W。设置页的系统通知权限、通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 连接状态统一从 Android 与 Shizuku 实时读取，并在启动、恢复前台和授权回调后刷新，不再依赖界面缓存。
 
 beta22 将电池电流读取顺序与 LLPower 对齐：先 `CURRENT_NOW`，再 `CURRENT_AVERAGE`，最后尝试 `/sys/class/power_supply/.../current_now` 等节点；无效哨兵归零，只有绝对值大于 20000 时才按微安换算。该机快充时 `CURRENT_NOW` 约为 `±9,500..±10,100` mA，旧实现的 10000 阈值会把越过阈值的一帧错误除以 1000，导致界面在约 38 W 和 0 W 之间跳动。功率由同一电流与电池电压直接计算，电流和功率使用同一修正结果。
 
 `cosa_ctc_value` 的可用范围从 beta23 起为 `-10..9`。基础档为 10、目标 gear 为 0 时写入 `-10`；基础档继续高于 10 时目标不可达，控制器保持在 `-10` 安全下界并明确显示实际计算档位。历史版本曾把 `-10` 视为无效哨兵，beta23 按当前设备实测需求调整下界；`-11` 及以下仍禁止写入。
+beta24 起，基础档“最大输出”不再执行 OPPower 自身的 41/42/43°C 温度分档，也不因温度切到 gear 1 或暂停；只要未达到 80% 电量暂停点，目标始终是 gear 0，温度变化只由系统原生热控处理。2026-10-25 真机已观察到基础档从 10 升到 11；此时 `cosa=-10` 已到合法下界，计算 gear 为 1，界面应明确显示目标 gear 0 不可达并保持 `-10`，禁止为了追求 gear 0 写入 `-11`。`getCurThermalPolicy` 返回 `null` 只代表当前策略回读为空，不能据此认定原生热控失效。
+
+beta25 修复“OPPower 偶发显示 0 W、LLPower 和充电器仍正常”的采样问题。历史库确认 AC 在线时原样记录过 33 条 `current_ma=0`、`power_w=0`，持续 3–30 秒；同期电压、温度、SOC 和充电状态正常，根因是 `BatteryManager.CURRENT_NOW` 本身偶发返回 0。应用现在只在 AC 在线、SOC 小于 99%、状态不是 FULL，且主电流为 0 或电压无效时，通过 Shizuku user service 执行一次固定只读 `dumpsys battery`，从同一输出取得 `Battery current` 与 `voltage` 后作为一个完整采样使用。后备值缺失、为 0 或超出合理范围时先由短时纠错器复用最近可靠帧；该复用只适用于 AC 在线且未充满的偶发零值，最多 3.5 秒，之后立即接受真实 0。正常非零功率变化不做平滑或防抖。普通页面和前台控制服务共用该策略。
+
+最大输出默认不再使用 41/42/43°C 三段规则，40.0–45.8°C 单测目标均为 gear 0；温度只影响系统原生 `Thermal Levels[0]`，OPPower 随后按新的基础档重算 `cosa`。20–40 W、10–30 W、80% 电量暂停、100%/FULL 暂停和显式自定义规则保持不变。
 
 RMX8899 的下表只记录“基础档为 8、场景其他影响当时为 0”时的历史条件样例。控制实现不使用该表中的固定映射：
 
@@ -51,12 +56,12 @@ RMX8899 的下表只记录“基础档为 8、场景其他影响当时为 0”�
 | `-7` | 2 | 9 | 更高 |
 | `-8` | 1 | 9 | 接近最高输出 |
 | `-9` | 0 | 12 | 实测约 15–30 W，跨应用保持 |
-| `-10` | 0 | -2 | beta23 用于基础档 10 时保持 gear 0；历史观测值仍是无效哨兵，需继续真机确认 |
+| `-10` | 0 | -2 | beta23 起用于基础档 10 时保持 gear 0；beta24 已真机确认自动写入并维持 |
 | `-11` 及以下 | 0 | -2 | 无效哨兵，禁止使用 |
 
 例如基础档为 6、目标为 0 时，所需 `cosa=-6`，计算结果也是 gear 0。基础档变成 7 后，目标仍为 0 时立即改为 `cosa=-7`。
 
-只有拔电、关闭总开关、电量暂停、充满或明确停止服务等生命周期条件才恢复系统默认 `cosa=0`，并在实际写入时触发一次系统重算。普通回读异常、短时策略为空或一次重算触发失败只保持当前偏移并继续读取，不会先把功率清零。软件不读取、不写入 `single_speed_charge_state`。
+只有拔电、关闭总开关、电量暂停、充满或用户点击“一键恢复”才恢复系统默认 `cosa=0`，并在实际写入时触发一次系统重算。系统驱动的服务销毁和重建不属于恢复条件；服务保持已持久化的控制意图，并在重建后继续计算目标。普通回读异常、短时策略为空或一次重算触发失败只保持当前偏移并继续读取，不会先把功率清零。软件不读取、不写入 `single_speed_charge_state`。
 
 ## 3. 用户档位
 
@@ -113,16 +118,9 @@ LLPower 的灵动岛、壁纸库、启动图标切换和语言切换依赖其独
 
 ## 5. 默认规则
 
-自定义关闭时，基础档“最大输出”：
+自定义关闭时，基础档“最大输出”没有 OPPower 自身的温度阈值。未达到电量暂停点时，无论电池温度处于 41/42/43°C 或更高，计算目标都持续为 gear 0；系统原生热控仍独立调节 `Thermal Levels[0]`，OPPower 只按新的基础档立即重算 `cosa`。基础档超过 10 时，受 `cosa=-10` 安全下界限制，计算 gear 可能暂时大于 0，应用显示“目标不可达”，不会写入更低的数值。
 
-| 条件 | 目标 |
-| --- | --- |
-| `T < 41.0°C` | 最大输出 |
-| `41.0°C ≤ T < 42.0°C` | 20–40 W，gear 1–4 内按温度选档 |
-| `42.0°C ≤ T < 43.0°C` | 10–30 W，gear 2–5 内按温度选档 |
-| `T ≥ 43.0°C` | 暂停 gear 策略，`cosa=0` |
-
-基础档 20–40 W 或 10–30 W 时，`T < 43.0°C` 在自身 gear 集合内按温度选档；`T ≥ 43.0°C` 暂停 gear 策略。
+基础档 20–40 W 或 10–30 W 时，`T < 43.0°C` 在自身 gear 集合内按温度选档；`T ≥ 43.0°C` 暂停 gear 策略。开启自定义规则后，两条温度条件和两条电量条件按用户输入生效，并可显式选择最大输出、20–40 W、10–30 W 或暂停。
 
 电量规则独立于内部 gear：
 
@@ -155,8 +153,9 @@ T ≥ T2                        → 温度条件 2 的目标
 
 ## 7. 动态档位与温度
 
-- 大档内部按 0.5°C 分段，从本档实测 gear 集合等距选择；温度越低使用越高功率端。
-- 均衡档内部只看温度；电量只决定是否暂停整个 gear 策略。
+- 最大输出只有 gear 0 一个目标，OPPower 不再按温度分档；系统原生热控通过改变基础档影响所需 `cosa`，但不会让应用主动追求升温或更高功率。
+- 20–40 W 大档内部按 0.5°C 分段，从本档实测 gear 集合等距选择；温度越低使用越高功率端。
+- 10–30 W 均衡档内部只看温度；电量只决定是否暂停整个 gear 策略。
 - 用户选择基础档、修改自定义规则或切换目标时不做防抖；当前控制周期按“目标 − 基础档”动态计算目标 `cosa`，只写一次并触发一次系统重算。
 - 计算 gear 只由 `Thermal Levels[0] + cosa` 得到；`policy.gear` 缓存不参与计算或验收，`chargeVal` 只显示为诊断字段。同一目标保持期间不重复写入 `cosa`、不重排 `m2()`，也不调用原生 `setChargingLevel`。
 - 暂停策略、SOC 锁定与 100% 充满规则优先于温度恢复。
@@ -168,7 +167,7 @@ T ≥ T2                        → 温度条件 2 的目标
 
 - AC 在线时前台服务每 1 秒读取基础档和 `cosa` 并重算档位；基础档变化、目标变化或外部 `cosa` 漂移时写入一次。页面数据每秒刷新，曲线按 LLPower 的 3/5/180 秒节奏采样。AC 断开后恢复 `cosa=0` 并释放前台服务，下一次接电由电源广播立即建立新会话。
 - 用户划掉界面后服务继续运行，主开关保存于 SharedPreferences。
-- 关闭总开关、服务销毁、AC 断开或 Shizuku 失败时，尽力恢复 `cosa=0`。
+- 关闭总开关、AC 断开、SOC 暂停或充满时恢复 `cosa=0`。系统销毁服务属于后台生命周期事件，不能据此撤销已下发的控制意图：`START_STICKY` 重建后继续按当前基础档计算并保持目标。
 - 服务启动时先读取设备当前 `cosa`；正常启用和切换都直接覆盖 `cosa`，不先清零，也不依赖持久基础档。
 - Android 无法保证进程被强制终止或 Shizuku 停止后的即时回滚；界面与文档保留这项限制。
 - 插拔电广播会立即唤醒控制服务；屏幕开关广播控制熄屏刷新频率、自动关闭和亮屏恢复。
@@ -185,11 +184,17 @@ settings get global cosa_ctc_value
 settings put global cosa_ctc_value -10…9
 settings get system oplus_camera_3rd_activity
 settings put system oplus_camera_3rd_activity 0|1|00|01
+settings get system oplus_float_window_show
+settings put system oplus_float_window_show 0|1|00|01
+settings get system smart_charge_switch_state
+settings put system smart_charge_switch_state 0|1
 dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy
 dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus
 ```
 
-不接受任意 shell、分号拼接、命令替换或其他设置名。`oplus_float_window_show` 与回退入口 `oplus_camera_3rd_activity` 只允许 `0/1/00/01` 四种等价写法，用于数值不变的监听触发。`setChargingLevel`、`SmartChgMode` 和 `set_charge` 广播均不在白名单。除 Shizuku 自身授予的能力外，不绕过签名、SELinux、HAL 或 OEM 组件权限。
+`readBatteryFallback()` 是独立的只读 AIDL 方法，固定执行 `dumpsys battery`，不接受调用方传命令；user service 内部超时 1.5 秒，主进程等待服务绑定最多 350 ms。它只在上述伪零条件触发，不扩大任意 shell 权限。LLPower 2.0.4 实际有两条采样路径：`BatteryEngine` 使用 `CURRENT_NOW → CURRENT_AVERAGE → current_now/main current_now/batt_current`，`ChargeEngine` 在 sysfs 缺失时解析 `dumpsys battery`；OPPower 按同样顺序组合这两条只读路径。
+
+不接受任意 shell、分号拼接、命令替换或其他设置名。`oplus_float_window_show` 与回退入口 `oplus_camera_3rd_activity` 只允许 `0/1/00/01` 四种等价写法，用于数值不变的监听触发；浮窗设置缺失时由控制器注入一次 `0`。`setChargingLevel`、`SmartChgMode` 和 `set_charge` 广播均不在白名单。除 Shizuku 自身授予的能力外，不绕过签名、SELinux、HAL 或 OEM 组件权限。
 
 ## 10. 当前限制
 

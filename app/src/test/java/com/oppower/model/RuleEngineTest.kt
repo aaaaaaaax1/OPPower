@@ -8,15 +8,16 @@ class RuleEngineTest {
     private val engine = RuleEngine()
 
     @Test
-    fun defaultMaxOutputRulesFollowMeasuredTiers() {
+    fun defaultMaxOutputKeepsGearZeroAcrossMeasuredTemperatures() {
         val settings = RuntimeSettings(baseTier = BaseTier.MAX_OUTPUT)
 
         assertEquals(0, decision(settings, 40f, 30).targetGear)
-        assertEquals(1, decision(settings, 41f, 30).targetGear)
-        assertEquals(2, decision(settings, 41.5f, 30).targetGear)
-        assertEquals(4, decision(settings, 42f, 30).targetGear)
-        assertEquals(5, decision(settings, 42.5f, 30).targetGear)
-        assertNull(decision(settings, 43f, 30).targetGear)
+        assertEquals(0, decision(settings, 41f, 30).targetGear)
+        assertEquals(0, decision(settings, 41.5f, 30).targetGear)
+        assertEquals(0, decision(settings, 42f, 30).targetGear)
+        assertEquals(0, decision(settings, 42.5f, 30).targetGear)
+        assertEquals(0, decision(settings, 43f, 30).targetGear)
+        assertEquals(0, decision(settings, 45.8f, 30).targetGear)
     }
 
     @Test

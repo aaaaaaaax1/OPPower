@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -22,6 +23,7 @@ import androidx.annotation.RequiresApi
 import com.oppower.MainActivity
 import com.oppower.R
 import com.oppower.battery.BatteryReader
+import com.oppower.controller.ChargingControlStateStore
 import com.oppower.controller.ChargingController
 import com.oppower.data.PreferencesStore
 import com.oppower.history.ChartHistoryBus
@@ -47,8 +49,6 @@ internal object StatusNotificationChannels {
     const val STATUS = "charge_control"
     const val LIVE = "battery_live_update_v2"
 }
-
-private val controlRestoreScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 class ChargeControlService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -82,7 +82,9 @@ class ChargeControlService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        android.util.Log.i("OPPower", "ChargeControlService created")
         shizuku = ShizukuGateway(this)
+        shizuku.bind()
         prefs = PreferencesStore(this)
         cachedSettings = prefs.load()
         prefsFile = getSharedPreferences("oppower", MODE_PRIVATE)
@@ -91,8 +93,11 @@ class ChargeControlService : Service() {
             ChargeControlBus.requestUpdate()
         }
         prefsFile.registerOnSharedPreferenceChangeListener(prefsListener)
-        controller = ChargingController(shizuku)
-        batteryReader = BatteryReader(this)
+        controller = ChargingController(
+            shizuku = shizuku,
+            controlState = SharedPreferencesChargingControlStateStore(this),
+        )
+        batteryReader = BatteryReader(this, shizuku::readBatteryFallback)
         historyStore = ChartHistoryStore(this)
         overlay = KeepAliveOverlay(this)
         overlayScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -171,6 +176,10 @@ class ChargeControlService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        android.util.Log.i(
+            "OPPower",
+            "ChargeControlService started action=${action ?: "sticky-restart"}",
+        )
         // Preferences are applied synchronously to the in-process instance, but
         // the service may have been created before the toggle was saved. Reload
         // on every command so the immediate pass always sees the new target.
@@ -241,15 +250,14 @@ class ChargeControlService : Service() {
         if (::overlay.isInitialized) overlay.remove()
         scope.cancel()
         if (::overlayScope.isInitialized) overlayScope.cancel()
-        if (::controller.isInitialized) {
-            val controllerToRestore = controller
-            // Shizuku Binder calls may wait several seconds. Restoration must
-            // never run on the lifecycle/main thread while the activity opens.
-            controlRestoreScope.launch {
-                runCatching { controllerToRestore.restoreAll() }
-                    .onFailure { android.util.Log.w("OPPower", "Unable to restore charge control", it) }
-            }
-        }
+        // Unplugging and disabling the master switch already restore the system
+        // settings synchronously in the control loop. A system-driven service
+        // destroy must not undo them: doing so caused background power drops and
+        // made reopening the app silently reinstate the target gear.
+        android.util.Log.i(
+            "OPPower",
+            "ChargeControlService destroyed; persisted control intent retained",
+        )
         ChargeControlBus.status.value = ControllerStatus(
             phase = ControllerPhase.DISABLED,
             message = "控制服务已停止",
@@ -566,6 +574,32 @@ class ChargeControlService : Service() {
         fun resumeNotification(context: Context) {
             start(context, ACTION_RESUME_NOTIFICATION)
         }
+    }
+}
+
+// Persist synchronously before changing the system value so a service kill cannot
+// lose the user's original smart-charge setting.
+@SuppressLint("UseKtx")
+private class SharedPreferencesChargingControlStateStore(context: Context) : ChargingControlStateStore {
+    private val prefs = context.applicationContext.getSharedPreferences("oppower", Context.MODE_PRIVATE)
+
+    override fun loadOriginalSmartChargeSwitch(): Int? =
+        if (prefs.contains(KEY_ORIGINAL_SMART_CHARGE_SWITCH)) {
+            prefs.getInt(KEY_ORIGINAL_SMART_CHARGE_SWITCH, 1)
+        } else {
+            null
+        }
+
+    override fun saveOriginalSmartChargeSwitch(value: Int): Boolean = prefs.edit()
+        .putInt(KEY_ORIGINAL_SMART_CHARGE_SWITCH, value)
+        .commit()
+
+    override fun clearOriginalSmartChargeSwitch(): Boolean = prefs.edit()
+        .remove(KEY_ORIGINAL_SMART_CHARGE_SWITCH)
+        .commit()
+
+    private companion object {
+        const val KEY_ORIGINAL_SMART_CHARGE_SWITCH = "control_original_smart_charge_switch_state"
     }
 }
 

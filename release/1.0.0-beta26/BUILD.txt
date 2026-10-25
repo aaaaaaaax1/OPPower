@@ -1,0 +1,21 @@
+OPPower 1.0.0-beta26
+versionCode: 26
+versionName: 1.0.0-beta26
+Build: debug
+Built: 2026-10-25 23:22:26 +08:00
+APK: OPPower-1.0.0-beta26-debug.apk
+SHA-256: 38E3965D418768D4E60DC53890E59C9EC019D558971B1E7226B147DC209DF91E
+
+Changes:
+- Fixed background power drops: service destruction no longer restores cosa or smart_charge_switch_state.
+- START_STICKY service recreation now resumes closed-loop gear control without requiring OPPower in the foreground.
+- Persisted smart_charge_switch_state original value; restoration remains correct if a recreated service first sees unplugged power or a disabled master switch.
+- Added bounded read-only dumpsys battery fallback and 3.5 s same-frame zero-sample stabilizer to reduce false 0 W readings.
+- Notification, fluid cloud, yellow lightning icon, WeChat handling and existing charging write scope were not changed.
+
+Validation:
+- 53 JVM unit tests passed (0 failures, 0 errors, 0 skipped).
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors (20 warnings).
+- Debug APK built and archived successfully.
+- Real-device background 3-minute comparison is required after installing this build.

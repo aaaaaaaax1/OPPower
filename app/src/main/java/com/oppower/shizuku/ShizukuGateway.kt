@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.IBinder
 import com.oppower.BuildConfig
+import com.oppower.battery.PrivilegedBatteryReading
 import com.oppower.controller.ChargingGateway
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CountDownLatch
@@ -139,6 +140,18 @@ class ShizukuGateway(context: Context) : ChargingGateway {
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus")
 
     /**
+     * Reads current and voltage from one privileged `dumpsys battery` sample. This
+     * path is used only when BatteryManager reports an AC-online zero, matching
+     * LLPower's shell-level fallback without adding any new shell-command surface.
+     */
+    fun readBatteryFallback(): PrivilegedBatteryReading? = runCatching {
+        if (!isAvailable || !hasPermission) return@runCatching null
+        val values = awaitService(BATTERY_SAMPLE_TIMEOUT_MILLIS).readBatteryFallback()
+        if (values.size != 2) return@runCatching null
+        PrivilegedBatteryReading(values[0], values[1])
+    }.getOrNull()
+
+    /**
      * ThermalControlUtils observes both settings. A float-window change calls
      * j2(null, 0ms), which requests an immediate policy recomputation. The
      * camera callback calls m2(), whose internal delay is about five seconds,
@@ -155,22 +168,23 @@ class ShizukuGateway(context: Context) : ChargingGateway {
     }
 
     private fun refreshViaAlias(name: String): Boolean {
-        val current = execute("settings get system $name").trim()
-        val numeric = current.toIntOrNull() ?: return false
-        val alias = thermalRefreshAlias(current) ?: return false
-        execute("settings put system $name $alias")
-        return execute("settings get system $name").trim().toIntOrNull() == numeric
+        val current = execute("settings get system $name")
+        val write = thermalRefreshWrite(current) ?: return false
+        execute("settings put system $name ${write.value}")
+        return execute("settings get system $name").trim().toIntOrNull() == write.expectedInt
     }
     private fun execute(command: String): String = awaitService().execute(command)
 
-    private fun awaitService(): IPrivilegedCommandService {
+    private fun awaitService(
+        timeoutMillis: Long = COMMAND_TIMEOUT_MILLIS,
+    ): IPrivilegedCommandService {
         bind()
         val latch: CountDownLatch
         synchronized(bindLock) {
             commandService?.let { return it }
             latch = connectedLatch ?: CountDownLatch(0)
         }
-        latch.await(4, TimeUnit.SECONDS)
+        latch.await(timeoutMillis, TimeUnit.MILLISECONDS)
         return synchronized(bindLock) {
             commandService ?: throw IllegalStateException("Shizuku 特权服务尚未连接")
         }
@@ -188,15 +202,28 @@ class ShizukuGateway(context: Context) : ChargingGateway {
 
     companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-
-
+        private const val COMMAND_TIMEOUT_MILLIS = 4_000L
+        private const val BATTERY_SAMPLE_TIMEOUT_MILLIS = 350L
     }
 }
 
-internal fun thermalRefreshAlias(current: String): String? = when (current.trim()) {
-    "0" -> "00"
-    "00" -> "0"
-    "1" -> "01"
-    "01" -> "1"
-    else -> null
-}
+internal data class ThermalRefreshWrite(
+    val value: String,
+    val expectedInt: Int,
+)
+
+/**
+ * ThermalControlUtils treats only integer 1 as an active float-window scene. If the
+ * provider has no row, it falls back to the same inactive state as 0. Normalizing
+ * that one absent row to 0 therefore preserves policy semantics while notifying the
+ * observer, which immediately runs j2(null, 0 ms).
+ */
+internal fun thermalRefreshWrite(current: String): ThermalRefreshWrite? =
+    when (current.trim().lowercase()) {
+        "0" -> ThermalRefreshWrite("00", 0)
+        "00" -> ThermalRefreshWrite("0", 0)
+        "1" -> ThermalRefreshWrite("01", 1)
+        "01" -> ThermalRefreshWrite("1", 1)
+        "null" -> ThermalRefreshWrite("0", 0)
+        else -> null
+    }

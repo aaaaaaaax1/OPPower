@@ -624,10 +624,8 @@ private fun TierGlyph(tier: BaseTier, selected: Boolean) {
 private fun DefaultRuleCard(settings: RuntimeSettings) {
     val rows = if (settings.baseTier == BaseTier.MAX_OUTPUT) {
         listOf(
-            "低于 41.0°C" to "最大输出",
-            "41.0°C 至 41.9°C" to "自动调整 · 20–40 W",
-            "42.0°C 至 42.9°C" to "自动调整 · 10–30 W",
-            "达到 43.0°C" to "暂停快充增强，恢复系统默认",
+            "默认" to "持续保持 gear 0",
+            "温度" to "由系统原生热控自行调节",
         )
     } else {
         listOf(

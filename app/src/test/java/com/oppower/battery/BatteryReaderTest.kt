@@ -1,6 +1,8 @@
 package com.oppower.battery
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BatteryReaderTest {
@@ -19,6 +21,99 @@ class BatteryReaderTest {
         assertEquals(-1_500f, normalizeCurrentToMa(-1_500_000L), 0f)
         assertEquals(0f, normalizeCurrentToMa(Int.MAX_VALUE.toLong()), 0f)
         assertEquals(0f, normalizeCurrentToMa(Long.MIN_VALUE), 0f)
+    }
+
+    @Test
+    fun privilegedFallbackRunsOnlyForAcOnlineZeroOrInvalidVoltage() {
+        assertTrue(
+            shouldReadPrivilegedFallback(
+                currentMa = 0f,
+                voltageMv = 4_120,
+                levelPercent = 72,
+                status = 2,
+                acOnline = true,
+            ),
+        )
+        assertTrue(
+            shouldReadPrivilegedFallback(
+                currentMa = 0f,
+                voltageMv = 0,
+                levelPercent = 72,
+                status = 2,
+                acOnline = true,
+            ),
+        )
+        assertFalse(
+            shouldReadPrivilegedFallback(
+                currentMa = 0f,
+                voltageMv = 4_120,
+                levelPercent = 72,
+                status = 3,
+                acOnline = false,
+            ),
+        )
+        assertFalse(
+            shouldReadPrivilegedFallback(
+                currentMa = 0f,
+                voltageMv = 4_120,
+                levelPercent = 99,
+                status = 2,
+                acOnline = true,
+            ),
+        )
+        assertFalse(
+            shouldReadPrivilegedFallback(
+                currentMa = 0f,
+                voltageMv = 4_120,
+                levelPercent = 98,
+                status = 5,
+                acOnline = true,
+            ),
+        )
+    }
+
+    @Test
+    fun privilegedFallbackReplacesPrimaryZeroWithoutMixingSamples() {
+        val resolved = resolveBatteryMeasurement(
+            primaryCurrentMa = 0f,
+            primaryVoltageMv = 4_220,
+            fallback = PrivilegedBatteryReading(currentMa = 493, voltageMv = 3_978),
+        )
+
+        assertEquals(493f, resolved.currentMa, 0f)
+        assertEquals(3_978, resolved.voltageMv)
+        assertEquals(1.961154f, calculatePowerW(resolved.currentMa, resolved.voltageMv), 0.000001f)
+    }
+
+    @Test
+    fun missingOrImplausibleFallbackDoesNotFabricateCurrent() {
+        assertEquals(
+            0f,
+            resolveBatteryMeasurement(
+                primaryCurrentMa = 0f,
+                primaryVoltageMv = 4_100,
+                fallback = PrivilegedBatteryReading(currentMa = 0, voltageMv = 4_100),
+            ).currentMa,
+            0f,
+        )
+        assertEquals(
+            0f,
+            resolveBatteryMeasurement(
+                primaryCurrentMa = 0f,
+                primaryVoltageMv = 4_100,
+                fallback = PrivilegedBatteryReading(currentMa = 20_001, voltageMv = 4_100),
+            ).currentMa,
+            0f,
+        )
+        assertEquals(
+            512f,
+            resolveBatteryMeasurement(
+                primaryCurrentMa = 512f,
+                primaryVoltageMv = 4_100,
+                fallback = PrivilegedBatteryReading(currentMa = 0, voltageMv = 3_978),
+            ).currentMa,
+            0f,
+        )
     }
 
     @Test
@@ -54,6 +149,75 @@ class BatteryReaderTest {
                 levelPercent = 98,
                 plugged = true,
             ),
+            0f,
+        )
+    }
+
+    @Test
+    fun transientAcZeroKeepsTheLastReliableSample() {
+        val stabilizer = CurrentSampleStabilizer(holdMillis = 3_500L)
+
+        assertEquals(
+            ResolvedBatteryMeasurement(10_010f, 3_940),
+            stabilizer.stabilize(
+                currentMa = 10_010f,
+                voltageMv = 3_940,
+                acOnline = true,
+                chargingEligible = true,
+                nowMillis = 1_000L,
+            ),
+        )
+        assertEquals(
+            ResolvedBatteryMeasurement(10_010f, 3_940),
+            stabilizer.stabilize(
+                currentMa = 0f,
+                voltageMv = 0,
+                acOnline = true,
+                chargingEligible = true,
+                nowMillis = 2_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun normalNonZeroCurrentChangesAreNotDebounced() {
+        val stabilizer = CurrentSampleStabilizer(holdMillis = 3_500L)
+        stabilizer.stabilize(10_010f, 3_940, true, true, 1_000L)
+
+        assertEquals(
+            ResolvedBatteryMeasurement(8_320f, 3_925),
+            stabilizer.stabilize(8_320f, 3_925, true, true, 1_100L),
+        )
+    }
+
+    @Test
+    fun zeroIsAcceptedAfterTheShortHoldWindow() {
+        val stabilizer = CurrentSampleStabilizer(holdMillis = 3_500L)
+        stabilizer.stabilize(8_500f, 4_000, true, true, 1_000L)
+
+        assertEquals(
+            0f,
+            stabilizer.stabilize(0f, 0, true, true, 4_501L).currentMa,
+            0f,
+        )
+    }
+
+    @Test
+    fun disconnectAndFullBatteryNeverReuseAChargingSample() {
+        val stabilizer = CurrentSampleStabilizer(holdMillis = 3_500L)
+        stabilizer.stabilize(8_500f, 4_000, true, true, 1_000L)
+
+        assertEquals(
+            0f,
+            stabilizer.stabilize(0f, 0, false, true, 2_000L).currentMa,
+            0f,
+        )
+
+        val fullStabilizer = CurrentSampleStabilizer(holdMillis = 3_500L)
+        fullStabilizer.stabilize(8_500f, 4_000, true, true, 1_000L)
+        assertEquals(
+            0f,
+            fullStabilizer.stabilize(0f, 0, true, false, 2_000L).currentMa,
             0f,
         )
     }

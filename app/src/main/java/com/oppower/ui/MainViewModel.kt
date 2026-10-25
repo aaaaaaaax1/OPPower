@@ -56,9 +56,9 @@ data class UiState(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val reader = BatteryReader(application)
-    private val store = PreferencesStore(application)
     private val shizuku = ShizukuGateway(application)
+    private val reader = BatteryReader(application, shizuku::readBatteryFallback)
+    private val store = PreferencesStore(application)
     private val historyStore = ChartHistoryStore(application)
     private val pageVisible = MutableStateFlow(false)
     private var historySignature = ""
@@ -75,6 +75,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<UiState> = mutable.asStateFlow()
 
     init {
+        shizuku.bind()
         viewModelScope.launch {
             val initial = withContext(Dispatchers.IO) {
                 historyStore.load() to readRuntimeAccessSnapshot()
