@@ -20,6 +20,7 @@ interface ChargingGateway {
     fun readThermalPolicy(): String
     fun readThermalStatus(): String
     fun requestThermalPolicyRefresh(): Boolean
+    fun requestNativeChargeLevel(level: Int): Boolean = false
 }
 
 class ChargingController(
@@ -41,20 +42,50 @@ class ChargingController(
     private var pausedFromGear: Int? = null
     private var cachedDiagnosticPolicy: ThermalPolicy? = null
     private var cachedDiagnosticPolicyAtMillis = Long.MIN_VALUE
+    private var levelZeroModeEntered = false
+    private var nativeLevelZeroApplied = false
+    private var nativeLevelRestorePending = false
+    private var lastNativeLevelZeroAttemptAt: Long? = null
+
+    private val levelZeroSafetyActive: Boolean
+        get() = levelZeroModeEntered || nativeLevelZeroApplied || nativeLevelRestorePending
 
     @Synchronized
-    fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
-        if (!settings.masterEnabled) {
-            restoreCosa()
+    fun evaluate(
+        settings: RuntimeSettings,
+        battery: BatterySnapshot,
+        screenOn: Boolean = true,
+    ): ControllerStatus {
+        if (!settings.masterEnabled && !settings.nativeLevelZeroEnabled) {
             lastAcForSession = battery.acOnline
-            return ControllerStatus(ControllerPhase.DISABLED, "总开关未开启")
+            val restoreFailure = runCatching { restoreEverything() }.exceptionOrNull()
+            return if (restoreFailure == null) {
+                ControllerStatus(ControllerPhase.DISABLED, "充电增强未开启")
+            } else {
+                ControllerStatus(
+                    ControllerPhase.ERROR,
+                    "关闭时恢复系统默认失败：${restoreFailure.message ?: restoreFailure.javaClass.simpleName}",
+                    desiredGear = if (levelZeroSafetyActive) 0 else null,
+                    levelZeroMode = levelZeroSafetyActive,
+                )
+            }
         }
 
         if (!shizuku.isAvailable) {
-            return ControllerStatus(ControllerPhase.ERROR, "Shizuku 未运行，未写入新的充电设置")
+            return ControllerStatus(
+                ControllerPhase.ERROR,
+                "Shizuku 未运行，未写入新的充电设置",
+                desiredGear = if (levelZeroSafetyActive) 0 else null,
+                levelZeroMode = levelZeroSafetyActive,
+            )
         }
         if (!shizuku.hasPermission) {
-            return ControllerStatus(ControllerPhase.ERROR, "OPPower 尚未获得 Shizuku 授权")
+            return ControllerStatus(
+                ControllerPhase.ERROR,
+                "OPPower 尚未获得 Shizuku 授权",
+                desiredGear = if (levelZeroSafetyActive) 0 else null,
+                levelZeroMode = levelZeroSafetyActive,
+            )
         }
 
         return runCatching {
@@ -65,18 +96,18 @@ class ChargingController(
             lastAcForSession = battery.acOnline
 
             if (!battery.acOnline) {
-                restoreCosa()
+                restoreEverything()
                 return ControllerStatus(ControllerPhase.WAITING_FOR_POWER, "等待接入电源")
             }
 
             val full = battery.levelPercent >= 100 || battery.status == 5
             if (full) {
-                restoreCosa()
+                restoreEverything()
                 lastFull = true
                 return ControllerStatus(ControllerPhase.FULL_PAUSED, "电量已充满：已恢复系统默认")
             }
             if (lastFull) {
-                restoreCosa()
+                restoreEverything()
                 return ControllerStatus(ControllerPhase.FULL_PAUSED, "本次插电已充满，拔电后重新开始")
             }
 
@@ -85,13 +116,31 @@ class ChargingController(
                 sessionSocLocked = true
             }
             if (sessionSocLocked) {
-                restoreCosa()
+                restoreEverything()
                 return ControllerStatus(
                     ControllerPhase.SOC_PAUSED,
-                    "电量达到 $pauseSoc%：本次插电已暂停快充增强",
+                    "电量达到 $pauseSoc%：本次插电已暂停充电增强",
                     sessionSocLocked = true,
+                    levelZeroMode = settings.nativeLevelZeroEnabled,
                 )
             }
+
+            if (!screenOn && !settings.screenOffBoostEnabled) {
+                restoreEverything()
+                return ControllerStatus(
+                    ControllerPhase.SCREEN_OFF_PAUSED,
+                    "息屏暂停 · 开启“息屏也生效”后继续",
+                    desiredGear = if (settings.nativeLevelZeroEnabled) 0 else lastAppliedGear,
+                    appliedCosa = currentCosa,
+                    levelZeroMode = settings.nativeLevelZeroEnabled,
+                )
+            }
+
+            if (settings.nativeLevelZeroEnabled) {
+                enterLevelZeroMode()
+                return evaluateLevelZero()
+            }
+            exitLevelZeroMode()
 
             val decision = rules.decide(
                 settings = settings,
@@ -222,7 +271,8 @@ class ChargingController(
             ControllerStatus(
                 ControllerPhase.ERROR,
                 "控制暂时中断，已保持当前设置：${error.message ?: error.javaClass.simpleName}",
-                desiredGear = lastAppliedGear,
+                desiredGear = if (levelZeroSafetyActive) 0 else lastAppliedGear,
+                levelZeroMode = levelZeroSafetyActive,
                 appliedCosa = currentCosa,
                 observedGear = lastObservedGear,
             )
@@ -257,10 +307,32 @@ class ChargingController(
     }
 
     @Synchronized
-    fun restoreAll(): ControllerStatus {
-        restoreCosa()
-        resetSession()
-        return ControllerStatus(ControllerPhase.DISABLED, "已恢复系统默认")
+    fun restoreAll(forceNativeRestore: Boolean = false): ControllerStatus {
+        val failure = runCatching {
+            var restoreFailure: Throwable? = null
+            try {
+                restoreNativeLevel(force = forceNativeRestore || levelZeroSafetyActive)
+            } catch (error: Throwable) {
+                restoreFailure = error
+            }
+            restoreCosa()
+            if (restoreFailure != null) throw restoreFailure
+            levelZeroModeEntered = false
+            nativeLevelZeroApplied = false
+            nativeLevelRestorePending = false
+            lastNativeLevelZeroAttemptAt = null
+            resetSession()
+        }.exceptionOrNull()
+        return if (failure == null) {
+            ControllerStatus(ControllerPhase.DISABLED, "已恢复系统默认")
+        } else {
+            ControllerStatus(
+                ControllerPhase.ERROR,
+                "恢复系统默认失败：${failure.message ?: failure.javaClass.simpleName}",
+                levelZeroMode = levelZeroSafetyActive,
+                appliedCosa = currentCosa,
+            )
+        }
     }
 
     @Synchronized
@@ -278,6 +350,99 @@ class ChargingController(
         pausedFromGear = null
         cachedDiagnosticPolicy = null
         cachedDiagnosticPolicyAtMillis = Long.MIN_VALUE
+        lastNativeLevelZeroAttemptAt = null
+    }
+
+    private fun enterLevelZeroMode() {
+        if (levelZeroModeEntered) return
+        // Level 0 is an independent opt-in path. Clear any normal-mode cosa
+        // offset first so the native charge-level write is the only active
+        // charging control. This path is strict: a failed reset must surface
+        // instead of silently combining both control mechanisms.
+        restoreOffset()
+        levelZeroModeEntered = true
+        nativeLevelZeroApplied = false
+        lastNativeLevelZeroAttemptAt = null
+    }
+
+    private fun exitLevelZeroMode() {
+        if (!levelZeroSafetyActive) return
+        restoreNativeLevel(force = true)
+        levelZeroModeEntered = false
+    }
+
+    private fun evaluateLevelZero(): ControllerStatus {
+        val now = nowMillis()
+        val lastAttempt = lastNativeLevelZeroAttemptAt
+        val attemptDue = lastAttempt == null || now - lastAttempt >= LEVEL_ZERO_POLL_MILLIS
+        if (!attemptDue) {
+            val remainingSeconds = ((LEVEL_ZERO_POLL_MILLIS - (now - lastAttempt!!) + 999L) / 1_000L)
+                .coerceAtLeast(1L)
+            return ControllerStatus(
+                phase = if (nativeLevelZeroApplied) ControllerPhase.ACTIVE else ControllerPhase.ERROR,
+                message = if (nativeLevelZeroApplied) {
+                    "高功率保活中 · 温度过高仍会自动保护"
+                } else {
+                    "高功率保活暂未生效 · $remainingSeconds 秒后重试"
+                },
+                desiredGear = 0,
+                levelZeroMode = true,
+                appliedCosa = currentCosa,
+                verified = nativeLevelZeroApplied,
+            )
+        }
+
+        lastNativeLevelZeroAttemptAt = now
+        val confirmed = runCatching { shizuku.requestNativeChargeLevel(NATIVE_LEVEL_ZERO) }
+            .getOrDefault(false)
+        nativeLevelZeroApplied = confirmed
+        nativeLevelRestorePending = !confirmed
+        return if (confirmed) {
+            ControllerStatus(
+                ControllerPhase.ACTIVE,
+                "高功率保活中 · 温度过高仍会自动保护",
+                desiredGear = 0,
+                levelZeroMode = true,
+                appliedCosa = currentCosa,
+                verified = true,
+            )
+        } else {
+            ControllerStatus(
+                ControllerPhase.ERROR,
+                "高功率保活暂未生效 · 3 秒后重试",
+                desiredGear = 0,
+                levelZeroMode = true,
+                appliedCosa = currentCosa,
+            )
+        }
+    }
+
+    private fun restoreEverything() {
+        var failure: Throwable? = null
+        try {
+            exitLevelZeroMode()
+        } catch (error: Throwable) {
+            failure = error
+        }
+        restoreCosa()
+        if (failure != null) throw failure
+    }
+
+    private fun restoreNativeLevel(force: Boolean = false) {
+        if (!force && !nativeLevelZeroApplied && !nativeLevelRestorePending) return
+        val confirmed = try {
+            shizuku.requestNativeChargeLevel(NATIVE_LEVEL_RESTORE)
+        } catch (error: Throwable) {
+            nativeLevelRestorePending = true
+            throw error
+        }
+        if (!confirmed) {
+            nativeLevelRestorePending = true
+            throw IllegalStateException("系统未确认恢复普通充电")
+        }
+        nativeLevelZeroApplied = false
+        nativeLevelRestorePending = false
+        lastNativeLevelZeroAttemptAt = null
     }
 
     private fun confirmGear(
@@ -414,6 +579,9 @@ class ChargingController(
     private companion object {
         const val TEMPERATURE_PAUSE_CANDIDATE = -1
         const val POLICY_DIAGNOSTIC_CACHE_MILLIS = 3_000L
+        const val LEVEL_ZERO_POLL_MILLIS = 3_000L
+        const val NATIVE_LEVEL_ZERO = 0
+        const val NATIVE_LEVEL_RESTORE = 2
     }
 
     private data class ControlSettings(

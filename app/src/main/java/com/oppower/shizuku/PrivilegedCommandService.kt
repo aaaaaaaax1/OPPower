@@ -188,6 +188,8 @@ internal object AllowedCommands {
         "settings get system oplus_float_window_show",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy",
         "dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus",
+        "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 0",
+        "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 2",
     )
     private val putCosa = Regex("settings put global cosa_ctc_value (?:-10|-?\\d)")
     private val putThermalRefreshAlias = Regex(

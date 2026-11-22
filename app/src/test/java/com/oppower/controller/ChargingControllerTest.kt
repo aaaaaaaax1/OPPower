@@ -289,6 +289,218 @@ class ChargingControllerTest {
 
 
     @Test
+    fun levelZeroStartsImmediatelyAndPollsOnlyEveryThreeSeconds() {
+        val gateway = FakeChargingGateway(cosa = -8, gear = 0)
+        var now = 1_000L
+        val controller = ChargingController(gateway, nowMillis = { now })
+        val settings = levelZeroSettings()
+
+        val first = controller.evaluate(settings, battery())
+        assertEquals(ControllerPhase.ACTIVE, first.phase)
+        assertTrue(first.levelZeroMode)
+        assertEquals(0, first.desiredGear)
+        assertEquals(listOf(0), gateway.writes)
+        assertEquals(listOf(0), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.policyReads)
+        assertEquals(0, gateway.statusReads)
+
+        now = 1_999L
+        controller.evaluate(settings, battery())
+        now = 3_999L
+        controller.evaluate(settings, battery())
+        assertEquals(listOf(0), gateway.nativeLevelRequests)
+
+        now = 4_000L
+        controller.evaluate(settings, battery())
+        assertEquals(listOf(0, 0), gateway.nativeLevelRequests)
+        assertEquals(listOf(0), gateway.writes)
+    }
+
+    @Test
+    fun levelZeroFailureIsReportedAndRetriedAfterThreeSeconds() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0).apply {
+            nativeLevelRequestSucceeds = false
+        }
+        var now = 1_000L
+        val controller = ChargingController(gateway, nowMillis = { now })
+        val settings = levelZeroSettings()
+
+        val first = controller.evaluate(settings, battery())
+        now = 2_000L
+        val secondAtTwoSeconds = controller.evaluate(settings, battery())
+        now = 4_000L
+        val retry = controller.evaluate(settings, battery())
+
+        assertEquals(ControllerPhase.ERROR, first.phase)
+        assertEquals(ControllerPhase.ERROR, secondAtTwoSeconds.phase)
+        assertEquals(listOf(0), gateway.nativeLevelRequests.take(1))
+        assertEquals(listOf(0, 0), gateway.nativeLevelRequests)
+        assertTrue(first.message.contains("3 秒后重试"))
+        assertTrue(retry.message.contains("3 秒后重试"))
+    }
+
+    @Test
+    fun levelZeroStartsWithMasterSwitchOff() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        var now = 1_000L
+        val controller = ChargingController(gateway, nowMillis = { now })
+        val settings = levelZeroSettings().copy(masterEnabled = false)
+
+        val status = controller.evaluate(settings, battery())
+
+        assertEquals(ControllerPhase.ACTIVE, status.phase)
+        assertTrue(status.levelZeroMode)
+        assertEquals(listOf(0), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.policyReads)
+        assertEquals(0, gateway.statusReads)
+    }
+
+    @Test
+    fun turningMasterOffDoesNotStopLevelZero() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        var now = 1_000L
+        val controller = ChargingController(gateway, nowMillis = { now })
+        val settings = levelZeroSettings()
+
+        assertEquals(ControllerPhase.ACTIVE, controller.evaluate(settings, battery()).phase)
+        now = 4_000L
+        val status = controller.evaluate(settings.copy(masterEnabled = false), battery())
+
+        assertEquals(ControllerPhase.ACTIVE, status.phase)
+        assertTrue(status.levelZeroMode)
+        assertEquals(listOf(0, 0), gateway.nativeLevelRequests)
+    }
+
+    @Test
+    fun turningOffLevelZeroWhileMasterIsOffRestoresSafeLevel() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        var now = 1_000L
+        val controller = ChargingController(gateway, nowMillis = { now })
+        val settings = levelZeroSettings().copy(masterEnabled = false)
+
+        controller.evaluate(settings, battery())
+        now = 2_000L
+        val status = controller.evaluate(settings.copy(nativeLevelZeroEnabled = false), battery())
+
+        assertEquals(ControllerPhase.DISABLED, status.phase)
+        assertEquals(listOf(0, 2), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.cosa)
+    }
+
+    @Test
+    fun socPauseRestoresNativeLevelTwoFromLevelZero() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+        val settings = levelZeroSettings()
+
+        controller.evaluate(settings, battery())
+        val status = controller.evaluate(settings, battery().copy(levelPercent = 80))
+
+        assertEquals(ControllerPhase.SOC_PAUSED, status.phase)
+        assertTrue(status.levelZeroMode)
+        assertEquals(listOf(0, 2), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.cosa)
+    }
+
+    @Test
+    fun disconnectRestoresNativeLevelTwoFromLevelZero() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+        val settings = levelZeroSettings()
+
+        controller.evaluate(settings, battery())
+        val status = controller.evaluate(settings, battery().copy(acOnline = false, status = 3))
+
+        assertEquals(ControllerPhase.WAITING_FOR_POWER, status.phase)
+        assertEquals(listOf(0, 2), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.cosa)
+    }
+
+    @Test
+    fun fullChargeRestoresNativeLevelTwoFromLevelZero() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+        val settings = levelZeroSettings()
+
+        controller.evaluate(settings, battery())
+        val status = controller.evaluate(settings, battery().copy(levelPercent = 100, status = 5))
+
+        assertEquals(ControllerPhase.FULL_PAUSED, status.phase)
+        assertEquals(listOf(0, 2), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.cosa)
+    }
+
+    @Test
+    fun screenOffPausesLevelZeroWhenScreenOffBoostIsDisabled() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+        val settings = levelZeroSettings()
+
+        controller.evaluate(settings, battery(), screenOn = true)
+        val paused = controller.evaluate(settings, battery(), screenOn = false)
+        controller.evaluate(settings, battery(), screenOn = false)
+
+        assertEquals(ControllerPhase.SCREEN_OFF_PAUSED, paused.phase)
+        assertEquals(listOf(0, 2), gateway.nativeLevelRequests)
+        assertEquals(0, gateway.cosa)
+    }
+
+    @Test
+    fun screenOffKeepsLevelZeroWhenScreenOffBoostIsEnabled() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+        val settings = levelZeroSettings().copy(screenOffBoostEnabled = true)
+
+        val status = controller.evaluate(settings, battery(), screenOn = false)
+
+        assertEquals(ControllerPhase.ACTIVE, status.phase)
+        assertTrue(status.levelZeroMode)
+        assertEquals(listOf(0), gateway.nativeLevelRequests)
+    }
+
+    @Test
+    fun failedExplicitRestoreDoesNotReportSuccess() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+        controller.evaluate(levelZeroSettings(), battery())
+        gateway.nativeLevelRequestSucceeds = false
+
+        val status = controller.restoreAll(forceNativeRestore = true)
+
+        assertEquals(ControllerPhase.ERROR, status.phase)
+        assertTrue(status.levelZeroMode)
+        assertTrue(status.message.contains("恢复系统默认失败"))
+    }
+
+    @Test
+    fun failedFreshSafetyRestoreStaysPendingForNextControlCycle() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0).apply {
+            nativeLevelRequestSucceeds = false
+        }
+        val controller = ChargingController(gateway)
+
+        val failed = controller.restoreAll(forceNativeRestore = true)
+        gateway.nativeLevelRequestSucceeds = true
+        val retried = controller.evaluate(RuntimeSettings(), battery())
+
+        assertEquals(ControllerPhase.ERROR, failed.phase)
+        assertTrue(failed.levelZeroMode)
+        assertEquals(ControllerPhase.DISABLED, retried.phase)
+        assertEquals(listOf(2, 2), gateway.nativeLevelRequests)
+    }
+
+    @Test
+    fun explicitRestoreAlsoWritesSafeNativeLevel() {
+        val gateway = FakeChargingGateway(cosa = 0, gear = 0)
+        val controller = ChargingController(gateway)
+
+        val status = controller.restoreAll(forceNativeRestore = true)
+
+        assertEquals(ControllerPhase.DISABLED, status.phase)
+        assertEquals(listOf(2), gateway.nativeLevelRequests)
+    }
+
+    @Test
     fun diagnosticPolicyIsCachedWithoutSlowingGearStatusChecks() {
         val gateway = FakeChargingGateway(cosa = -8, gear = 0, baseGear = 8)
         var now = 1_000L
@@ -319,6 +531,9 @@ class ChargingControllerTest {
         baseTier = baseTier,
     )
 
+    private fun levelZeroSettings(baseTier: BaseTier = BaseTier.MAX_OUTPUT) =
+        settings(baseTier).copy(nativeLevelZeroEnabled = true)
+
     private fun battery() = BatterySnapshot(
         temperatureC = 30f,
         levelPercent = 30,
@@ -344,6 +559,8 @@ class ChargingControllerTest {
         var refreshRequests = 0
         var policyReads = 0
         var statusReads = 0
+        var nativeLevelRequestSucceeds = true
+        val nativeLevelRequests = mutableListOf<Int>()
 
         override fun readGlobal(name: String): String {
             assertEquals("cosa_ctc_value", name)
@@ -369,6 +586,11 @@ class ChargingControllerTest {
         override fun requestThermalPolicyRefresh(): Boolean {
             refreshRequests += 1
             return refreshSucceeds
+        }
+
+        override fun requestNativeChargeLevel(level: Int): Boolean {
+            nativeLevelRequests += level
+            return nativeLevelRequestSucceeds
         }
     }
 

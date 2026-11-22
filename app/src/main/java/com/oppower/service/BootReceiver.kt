@@ -12,7 +12,8 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
             -> PreferencesStore(context).load().let {
-                (it.masterEnabled && it.resumeAfterReboot) || it.liveNotificationEnabled
+                ((it.masterEnabled || it.nativeLevelZeroEnabled) && it.resumeAfterReboot) ||
+                    it.liveNotificationEnabled
             }
             else -> false
         }

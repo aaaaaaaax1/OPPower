@@ -36,6 +36,8 @@ class PreferencesStore(context: Context) {
         return RuntimeSettings(
             masterEnabled = prefs.getBoolean("master_enabled", false),
             baseTier = base,
+            nativeLevelZeroEnabled = prefs.getBoolean("native_level_zero_enabled", false),
+            screenOffBoostEnabled = prefs.getBoolean("screen_off_boost_enabled", false),
             customRulesEnabled = prefs.getBoolean("custom_rules", false),
             customRules = custom,
             liveNotificationEnabled = prefs.getBoolean("live_notification", true),
@@ -83,6 +85,8 @@ class PreferencesStore(context: Context) {
         prefs.edit()
             .putBoolean("master_enabled", settings.masterEnabled)
             .putString("base_tier", settings.baseTier.name)
+            .putBoolean("native_level_zero_enabled", settings.nativeLevelZeroEnabled)
+            .putBoolean("screen_off_boost_enabled", settings.screenOffBoostEnabled)
             .putBoolean("custom_rules", settings.customRulesEnabled)
             .putBoolean("live_notification", settings.liveNotificationEnabled)
             .putBoolean("history_enabled", settings.historyEnabled)

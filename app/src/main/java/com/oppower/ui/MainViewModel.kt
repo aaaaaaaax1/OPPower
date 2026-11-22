@@ -20,6 +20,7 @@ import com.oppower.history.buildChargeRecords
 import com.oppower.model.BatterySnapshot
 import com.oppower.model.ChargeRecord
 import com.oppower.model.ChartPoint
+import com.oppower.model.ControllerPhase
 import com.oppower.model.ControllerStatus
 import com.oppower.model.GearReadResult
 import com.oppower.model.RuntimeSettings
@@ -159,7 +160,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (battery != null) {
                             mutable.value = mutable.value.copy(
                                 battery = battery,
-                                controllerStatus = ChargeControlBus.status.value,
+                                controllerStatus = controllerStatusForDisplay(
+                                    settings = settings,
+                                    battery = battery,
+                                    status = ChargeControlBus.status.value,
+                                ),
                             )
                             if (!sharedIsFresh && settings.historyEnabled &&
                                 historyWriteInFlight.compareAndSet(false, true)
@@ -205,6 +210,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutable.value = mutable.value.copy(settings = updated)
         val controlChanged =
             oldSettings.masterEnabled != updated.masterEnabled ||
+                oldSettings.nativeLevelZeroEnabled != updated.nativeLevelZeroEnabled ||
+                oldSettings.screenOffBoostEnabled != updated.screenOffBoostEnabled ||
                 oldSettings.baseTier != updated.baseTier ||
                 oldSettings.customRulesEnabled != updated.customRulesEnabled ||
                 oldSettings.customRules != updated.customRules ||
@@ -294,7 +301,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun restoreAll() {
-        updateSettings { it.copy(masterEnabled = false) }
+        updateSettings {
+            it.copy(
+                masterEnabled = false,
+                nativeLevelZeroEnabled = false,
+            )
+        }
         ChargeControlService.restore(getApplication())
     }
 
@@ -313,6 +325,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissIntro() {
         store.markIntroSeen()
         mutable.value = mutable.value.copy(showIntro = false)
+    }
+
+    private fun controllerStatusForDisplay(
+        settings: RuntimeSettings,
+        battery: BatterySnapshot,
+        status: ControllerStatus,
+    ): ControllerStatus = if (
+        (settings.masterEnabled || settings.nativeLevelZeroEnabled) &&
+        status.phase == ControllerPhase.DISABLED
+    ) {
+        val enabledLabel = if (settings.nativeLevelZeroEnabled) "高功率保活已开启" else "强制亮屏快充已开启"
+        ControllerStatus(
+            phase = ControllerPhase.WAITING_FOR_POWER,
+            message = if (battery.acOnline) "$enabledLabel · 正在连接" else "$enabledLabel · 接电后自动开始",
+        )
+    } else {
+        status
     }
 
     private fun readRuntimeAccessSnapshot(): RuntimeAccessSnapshot {

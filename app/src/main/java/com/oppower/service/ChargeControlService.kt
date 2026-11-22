@@ -61,7 +61,7 @@ class ChargeControlService : Service() {
     private lateinit var overlay: KeepAliveOverlay
     private lateinit var overlayScope: CoroutineScope
     private var foregroundStarted = false
-    private var screenOn = true
+    @Volatile private var screenOn = true
     private var lastNotificationText = ""
     private var lastNotificationTitle = ""
     private var lastNotificationAt = 0L
@@ -130,7 +130,7 @@ class ChargeControlService : Service() {
                         // the master switch is off. Keeping that path in the normal
                         // cycle prevents a disabled switch from leaving an old
                         // offset active after a settings change.
-                        val status = controller.evaluate(settings, battery)
+                        val status = controller.evaluate(settings, battery, screenOn)
                         ChargeControlBus.status.value = status
                         if (lastOverlayEnabled != settings.overlayKeepAliveEnabled) {
                             lastOverlayEnabled = settings.overlayKeepAliveEnabled
@@ -153,11 +153,21 @@ class ChargeControlService : Service() {
                                     "cosa=${status.appliedCosa}",
                             )
                         }
-                        if (!battery.acOnline) {
+                        // If Level 0 is still active after the last save point,
+                        // keep retrying the safe native restore instead of
+                        // stopping the only process that can perform it.
+                        val retryingSafetyRestore =
+                            status.phase == ControllerPhase.ERROR && status.levelZeroMode
+                        if (!battery.acOnline && !retryingSafetyRestore) {
                             if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
                             stopSelf()
                             keepRunning = false
-                        } else if (!settings.masterEnabled && !settings.liveNotificationEnabled) {
+                        } else if (
+                            !settings.masterEnabled &&
+                            !settings.nativeLevelZeroEnabled &&
+                            !settings.liveNotificationEnabled &&
+                            !retryingSafetyRestore
+                        ) {
                             if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
                             stopSelf()
                             keepRunning = false
@@ -195,13 +205,18 @@ class ChargeControlService : Service() {
         // on every command so the immediate pass always sees the new target.
         cachedSettings = prefs.load()
         val settings = cachedSettings
-        val enabled = settings.masterEnabled || settings.liveNotificationEnabled
+        val enabled = settings.masterEnabled ||
+            settings.nativeLevelZeroEnabled ||
+            settings.liveNotificationEnabled
         if (action == ACTION_RESUME_NOTIFICATION) {
             if (!enabled) return START_NOT_STICKY
             notificationDismissed = false
         }
         if (action in IMMEDIATE_CONTROL_ACTIONS && !enabled) {
-            stopSelf()
+            // Turning off the last control feature must take one explicit safe
+            // restore pass before the service exits. Relying on the prior loop
+            // is racy: stopSelf() can cancel the only retry path first.
+            restoreAfterControlsDisabled()
             return START_NOT_STICKY
         }
 
@@ -229,16 +244,22 @@ class ChargeControlService : Service() {
         }
         if (action == ACTION_RESTORE_ALL) {
             scope.launch {
-                val status = controller.restoreAll()
+                val status = controller.restoreAll(forceNativeRestore = true)
                 ChargeControlBus.status.value = status
                 val settings = cachedSettings
                 val battery = batteryReader.snapshot(settings)
                 syncStatusNotification(
-                    ControllerStatus(ControllerPhase.DISABLED, "已恢复系统默认"),
+                    status,
                     battery,
                     settings,
                     force = true,
                 )
+                if (status.phase == ControllerPhase.ERROR && status.levelZeroMode) {
+                    // A failed native safety restore must keep a local retry path
+                    // even when both the master switch and live notification are off.
+                    startControlLoop()
+                    ChargeControlBus.requestUpdate()
+                }
             }
         }
         if (action == ACTION_HISTORY_SETTING_CHANGED) {
@@ -253,6 +274,25 @@ class ChargeControlService : Service() {
         return if (enabled) START_STICKY else START_NOT_STICKY
     }
 
+    private fun restoreAfterControlsDisabled() {
+        scope.launch {
+            val status = controller.restoreAll(forceNativeRestore = true)
+            ChargeControlBus.status.value = status
+            android.util.Log.i(
+                "OPPower",
+                "All controls disabled; safety restore phase=${status.phase}",
+            )
+            if (status.phase == ControllerPhase.ERROR && status.levelZeroMode) {
+                // Keep the local retry path alive until the safe level is confirmed.
+                startControlLoop()
+                ChargeControlBus.requestUpdate()
+                return@launch
+            }
+            if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
     override fun onDestroy() {
         runCatching { unregisterReceiver(screenReceiver) }
         if (::prefsFile.isInitialized && ::prefsListener.isInitialized) {
@@ -261,8 +301,8 @@ class ChargeControlService : Service() {
         if (::overlay.isInitialized) overlay.remove()
         scope.cancel()
         if (::overlayScope.isInitialized) overlayScope.cancel()
-        // Unplugging and disabling the master switch already restore the system
-        // settings synchronously in the control loop. A system-driven service
+        // Unplugging and disabling the final active control already restore the
+        // system settings synchronously in the control loop. A system-driven service
         // destroy must not undo them: doing so caused background power drops and
         // made reopening the app silently reinstate the target gear.
         android.util.Log.i(
@@ -285,11 +325,16 @@ class ChargeControlService : Service() {
         force: Boolean = false,
     ) {
         if (!force && notificationDismissed) return
-        if (!settings.masterEnabled || !battery.acOnline) {
+        val controlEnabled = settings.masterEnabled || settings.nativeLevelZeroEnabled
+        if (!controlEnabled || !battery.acOnline) {
             if (settings.liveNotificationEnabled && battery.acOnline) {
                 val power = notificationPower(battery, settings)
                 val data = notificationBatteryData(battery, settings)
-                val tier = "亮屏快充未启用"
+                val tier = if (status.phase == ControllerPhase.ERROR) {
+                    status.message.ifBlank { "恢复系统默认失败" }
+                } else {
+                    "充电增强未启用"
+                }
                 val notification = notification(power, data, tier, battery, settings)
                 if (!foregroundStarted) {
                     startForeground(NOTIFICATION_ID, notification)
@@ -325,10 +370,18 @@ class ChargeControlService : Service() {
             if (full) {
                 "已充满 · 充电增强已交还系统"
             } else {
-                "亮屏快充保护正在运行"
+                "充电保护正在运行"
             }
         }
-        val tier = if (detailAllowed) powerTierLabel(status.desiredGear) else ""
+        val tier = if (detailAllowed) {
+            when {
+                status.phase == ControllerPhase.ACTIVE && status.levelZeroMode -> "高功率保活"
+                status.phase != ControllerPhase.ACTIVE && status.levelZeroMode -> phaseLabel(status.phase)
+                else -> powerTierLabel(status.desiredGear)
+            }
+        } else {
+            ""
+        }
         val title = power
         val text = "$data\n$tier"
         val now = System.currentTimeMillis()
@@ -410,7 +463,7 @@ class ChargeControlService : Service() {
             .setShowWhen(usesLiveStyle)
             .setWhen(if (usesLiveStyle) System.currentTimeMillis() else 0L)
         if (usesLiveStyle) {
-            builder.setStyle(liveProgressStyle(level, settings.masterEnabled))
+            builder.setStyle(liveProgressStyle(level, settings.masterEnabled || settings.nativeLevelZeroEnabled))
         } else {
             builder.setProgress(100, level, false)
         }
@@ -487,6 +540,7 @@ class ChargeControlService : Service() {
         ControllerPhase.TEMPERATURE_PAUSED -> "温度保护"
         ControllerPhase.SOC_PAUSED -> "电量保护"
         ControllerPhase.FULL_PAUSED -> "已充满"
+        ControllerPhase.SCREEN_OFF_PAUSED -> "息屏暂停"
         ControllerPhase.ERROR -> "需要检查"
     }
 
@@ -518,7 +572,10 @@ class ChargeControlService : Service() {
             action: String = ACTION_CONTROL_SETTINGS_CHANGED,
         ): Boolean {
             val settings = PreferencesStore(context).load()
-            if (!settings.masterEnabled && !settings.liveNotificationEnabled) return false
+            if (!settings.masterEnabled &&
+                !settings.nativeLevelZeroEnabled &&
+                !settings.liveNotificationEnabled
+            ) return false
             val batteryIntent = context.registerReceiver(
                 null,
                 IntentFilter(Intent.ACTION_BATTERY_CHANGED),
@@ -551,7 +608,9 @@ class ChargeControlService : Service() {
                 override fun run() {
                     completedAttempts += 1
                     val settings = PreferencesStore(appContext).load()
-                    val enabled = settings.masterEnabled || settings.liveNotificationEnabled
+                    val enabled = settings.masterEnabled ||
+                        settings.nativeLevelZeroEnabled ||
+                        settings.liveNotificationEnabled
                     if (start(appContext, action) || !enabled || completedAttempts >= attempts) {
                         onFinished?.invoke()
                         return
@@ -576,7 +635,10 @@ class ChargeControlService : Service() {
         fun controlSettingsChanged(context: Context) {
             val appContext = context.applicationContext
             val settings = PreferencesStore(appContext).load()
-            if (settings.masterEnabled || settings.liveNotificationEnabled) {
+            if (settings.masterEnabled ||
+                settings.nativeLevelZeroEnabled ||
+                settings.liveNotificationEnabled
+            ) {
                 startWhenAvailable(appContext, action = ACTION_CONTROL_SETTINGS_CHANGED)
                 return
             }

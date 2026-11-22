@@ -212,12 +212,13 @@ private fun SettingsHomePage(
             )
         }
 
-        Surface(
+        GlassPanel(
             modifier = Modifier.fillMaxWidth().clickable(onClick = onJoinQq),
-            color = AccentSurface,
+            tint = AccentSurface,
+            accent = Cyan,
+            highlighted = true,
             shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, Cyan.copy(alpha = 0.42f)),
-            shadowElevation = 2.dp,
+            shadowElevation = 9.dp,
         ) {
             Row(Modifier.padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 SettingsGlyph("Q", false)
@@ -724,11 +725,13 @@ private fun FaqPage(onBack: () -> Unit) {
     )
     SettingsPage("常见问题", "功率、读数与后台运行", onBack) {
         entries.forEachIndexed { index, entry ->
-            Surface(
+            GlassPanel(
                 modifier = Modifier.fillMaxWidth().clickable { expanded = if (expanded == index) -1 else index },
-                color = if (expanded == index) AccentSurface else Surface,
+                tint = if (expanded == index) AccentSurface else Surface,
+                accent = if (expanded == index) Cyan else Amber,
+                highlighted = expanded == index,
                 shape = RoundedCornerShape(13.dp),
-                border = BorderStroke(1.dp, if (expanded == index) Cyan.copy(alpha = 0.55f) else Outline),
+                shadowElevation = if (expanded == index) 7.dp else 4.dp,
             ) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -764,10 +767,13 @@ private fun AboutPage(
     onJoinQq: () -> Unit,
 ) {
     SettingsPage("关于 OPPower", "版本 ${BuildConfig.VERSION_NAME}", onBack) {
-        Surface(
-            color = AccentSurface,
+        GlassPanel(
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, Cyan.copy(alpha = 0.42f)),
+            tint = AccentSurface,
+            accent = Cyan,
+            highlighted = true,
+            shadowElevation = 10.dp,
         ) {
             Column(Modifier.fillMaxWidth().padding(18.dp)) {
                 Text("OPPower", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Black)
@@ -851,31 +857,32 @@ private fun SettingsPage(
     onBack: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.48f))))
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                color = SurfaceRaised,
-                shape = CircleShape,
-                border = BorderStroke(1.dp, Outline),
-                modifier = Modifier.clickable(onClick = onBack),
-            ) {
-                Text("‹", color = TextPrimary, fontSize = 28.sp, modifier = Modifier.padding(horizontal = 11.dp, vertical = 2.dp))
+    GlassBackdrop {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                GlassPanel(
+                    shape = CircleShape,
+                    tint = SurfaceRaised,
+                    shadowElevation = 7.dp,
+                    modifier = Modifier.clickable(onClick = onBack),
+                ) {
+                    Text("‹", color = TextPrimary, fontSize = 28.sp, modifier = Modifier.padding(horizontal = 11.dp, vertical = 2.dp))
+                }
+                Column(Modifier.padding(start = 11.dp)) {
+                    Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(subtitle, color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
+                }
             }
-            Column(Modifier.padding(start = 11.dp)) {
-                Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text(subtitle, color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
-            }
+            content()
+            Spacer(Modifier.height(16.dp))
         }
-        content()
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -883,11 +890,11 @@ private fun SettingsPage(
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(title, color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
-        Surface(
-            color = Surface,
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, Outline),
-            shadowElevation = 2.dp,
+        GlassPanel(
+            shape = RoundedCornerShape(16.dp),
+            tint = Surface,
+            accent = Cyan,
+            shadowElevation = 8.dp,
         ) {
             Column(Modifier.fillMaxWidth(), content = content)
         }
@@ -917,15 +924,17 @@ private fun SettingsMenuRow(
 
 @Composable
 private fun SettingsGlyph(icon: String, warm: Boolean) {
-    Surface(
-        color = when {
+    GlassPanel(
+        tint = when {
             warm -> AmberSurface
             icon == "◐" -> Color(0xFF24262D)
             icon == "◎" || icon == "⌁" -> Color(0xFF26271F)
             else -> AccentSurface
         },
-        shape = RoundedCornerShape(9.dp),
-        border = BorderStroke(1.dp, Outline.copy(alpha = 0.9f)),
+        accent = if (warm) Amber else Cyan,
+        highlighted = warm,
+        shape = RoundedCornerShape(10.dp),
+        shadowElevation = 5.dp,
     ) {
         Box(Modifier.size(31.dp), contentAlignment = Alignment.Center) {
             Text(
@@ -1017,11 +1026,13 @@ private fun <T> ChoiceGrid(
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 rowOptions.forEach { option ->
                     val isSelected = option == selected
-                    Surface(
+                    GlassPanel(
                         modifier = Modifier.weight(1f).clickable { onSelect(option) },
-                        color = if (isSelected) AccentSurface else SurfaceRaised,
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, if (isSelected) Cyan else Outline),
+                        tint = if (isSelected) AccentSurface else SurfaceRaised,
+                        accent = if (isSelected) Cyan else Outline,
+                        highlighted = isSelected,
+                        shape = RoundedCornerShape(9.dp),
+                        shadowElevation = if (isSelected) 7.dp else 4.dp,
                     ) {
                         Box(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
                             Text(

@@ -20,7 +20,8 @@ class AllowedCommandsTest {
         assertTrue(AllowedCommands.matches("settings put system oplus_float_window_show 01"))
         assertTrue(AllowedCommands.matches("dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy"))
         assertTrue(AllowedCommands.matches("dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus"))
-
+        assertTrue(AllowedCommands.matches("dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 0"))
+        assertTrue(AllowedCommands.matches("dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 2"))
     }
 
     @Test
@@ -84,11 +85,6 @@ class AllowedCommandsTest {
         assertFalse(AllowedCommands.matches("service call guardelfthermalcontrol 19"))
         assertFalse(AllowedCommands.matches("service call guardelfthermalcontrol 20 s16 0"))
         assertFalse(AllowedCommands.matches("service call guardelfthermalcontrol 20 s16 0; reboot"))
-        assertFalse(
-            AllowedCommands.matches(
-                "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 0",
-            ),
-        )
         assertFalse(
             AllowedCommands.matches(
                 "dumpsys activity service com.oplus.battery/.OplusBatteryService setChargingLevel 1",

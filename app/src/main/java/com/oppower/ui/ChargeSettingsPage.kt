@@ -87,26 +87,27 @@ internal fun ChargeSettingsPage(
         mutableStateListOf(*state.settings.customRules.socRules.map { it.thresholdPercent.toString() }.toTypedArray())
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.48f))))
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        PageHeader(
+    GlassBackdrop {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .verticalScroll(rememberScrollState())
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PageHeader(
             title = "强制亮屏快充",
             subtitle = "接电后校准 · 拔电自动恢复",
             onBack = onBack,
         )
 
-        Surface(
-            color = Surface,
-            shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, Outline),
-            shadowElevation = 3.dp,
+        GlassPanel(
+            tint = AccentSurface,
+            accent = Cyan,
+            highlighted = state.settings.masterEnabled,
+            shape = RoundedCornerShape(13.dp),
+            shadowElevation = if (state.settings.masterEnabled) 12.dp else 7.dp,
         ) {
             Column(Modifier.padding(13.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -176,6 +177,24 @@ internal fun ChargeSettingsPage(
                     color = TextSecondary,
                     fontSize = 10.sp,
                 )
+                HorizontalDivider(Modifier.padding(vertical = 9.dp), color = Outline)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("息屏也生效", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "关闭时，屏幕熄灭后暂停充电增强",
+                            color = TextSecondary,
+                            fontSize = 9.sp,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    Switch(
+                        checked = state.settings.screenOffBoostEnabled,
+                        onCheckedChange = { enabled ->
+                            onSettingsChange { it.copy(screenOffBoostEnabled = enabled) }
+                        },
+                    )
+                }
             }
         }
 
@@ -197,11 +216,12 @@ internal fun ChargeSettingsPage(
             DefaultRuleCard(state.settings)
         }
 
-        Surface(
-            color = SurfaceRaised,
-            shape = RoundedCornerShape(13.dp),
-            border = BorderStroke(1.dp, if (state.settings.customRulesEnabled) Cyan.copy(alpha = 0.45f) else Outline),
-            shadowElevation = 3.dp,
+        GlassPanel(
+            tint = if (state.settings.customRulesEnabled) AccentSurface else SurfaceRaised,
+            accent = Cyan,
+            highlighted = state.settings.customRulesEnabled,
+            shape = RoundedCornerShape(14.dp),
+            shadowElevation = if (state.settings.customRulesEnabled) 10.dp else 7.dp,
         ) {
             Column(Modifier.padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -227,11 +247,12 @@ internal fun ChargeSettingsPage(
                     exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(tween(120)),
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        Surface(
-                            color = AccentSurface,
+                        GlassPanel(
+                            tint = AccentSurface,
+                            accent = Cyan,
                             shape = RoundedCornerShape(9.dp),
-                            border = BorderStroke(1.dp, Cyan.copy(alpha = 0.24f)),
                             modifier = Modifier.padding(top = 10.dp),
+                            shadowElevation = 4.dp,
                         ) {
                             Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("当前状态", color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
@@ -342,10 +363,11 @@ internal fun ChargeSettingsPage(
                             )
                         }
 
-                        Surface(
-                            color = AmberSurface,
+                        GlassPanel(
+                            tint = AmberSurface,
+                            accent = Amber,
                             shape = RoundedCornerShape(9.dp),
-                            border = BorderStroke(1.dp, Amber.copy(alpha = 0.34f)),
+                            shadowElevation = 4.dp,
                         ) {
                             Row(Modifier.fillMaxWidth().padding(10.dp)) {
                                 Text("100% / 充满", color = Amber, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -361,7 +383,7 @@ internal fun ChargeSettingsPage(
             CustomRulePreview(state.settings)
         }
 
-        Surface(color = Surface, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, Outline)) {
+        GlassPanel(tint = Surface, accent = Cyan, shape = RoundedCornerShape(12.dp), shadowElevation = 6.dp) {
             Column(Modifier.padding(11.dp)) {
                 Text("自动调节说明", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 Text("• 温度升高时自动降低充电功率。", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
@@ -370,27 +392,29 @@ internal fun ChargeSettingsPage(
             }
         }
 
-        Button(
-            onClick = onRestore,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF402624),
-                contentColor = Danger,
-            ),
-        ) {
-            Text("一键恢复系统默认")
+            Button(
+                onClick = onRestore,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF402624),
+                    contentColor = Danger,
+                ),
+            ) {
+                Text("一键恢复系统默认")
+            }
+            Spacer(Modifier.height(12.dp))
         }
-        Spacer(Modifier.height(12.dp))
     }
 }
 
 @Composable
 private fun ShizukuCard(state: UiState, onRequestShizuku: () -> Unit) {
-    Surface(
-        color = Surface,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, Outline),
-        shadowElevation = 1.dp,
+    GlassPanel(
+        tint = Surface,
+        accent = if (state.shizukuAvailable && state.shizukuPermission) Cyan else Amber,
+        highlighted = state.shizukuAvailable && state.shizukuPermission,
+        shape = RoundedCornerShape(12.dp),
+        shadowElevation = 7.dp,
     ) {
         Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -449,10 +473,11 @@ private fun RuleEditorRow(
     onSelected: (ControlTier) -> Unit,
 ) {
     var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    Surface(
-        color = Surface,
+    GlassPanel(
+        tint = Surface,
+        accent = if (valid) Cyan else Danger,
         shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Outline),
+        shadowElevation = 3.dp,
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -535,14 +560,15 @@ private fun RuleEditorRow(
 private fun BaseTierCard(tier: BaseTier, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val borderColor by animateColorAsState(if (selected) Cyan else Outline, tween(180), label = "tier-border")
     val scale by animateFloatAsState(if (selected) 1f else 0.97f, spring(dampingRatio = 0.76f), label = "tier-scale")
-    Surface(
+    GlassPanel(
         modifier = modifier
             .clickable(onClick = onClick)
             .graphicsLayer(scaleX = scale, scaleY = scale),
-        color = if (selected) AccentSurface else Surface,
-        shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, borderColor),
-        shadowElevation = if (selected) 4.dp else 1.dp,
+        tint = if (selected) AccentSurface else Surface,
+        accent = borderColor,
+        highlighted = selected,
+        shape = RoundedCornerShape(12.dp),
+        shadowElevation = if (selected) 11.dp else 5.dp,
     ) {
         Column(Modifier.padding(horizontal = 9.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -633,11 +659,11 @@ private fun DefaultRuleCard(settings: RuntimeSettings) {
             "达到 43.0°C" to "暂停快充增强，恢复系统默认",
         )
     }
-    Surface(
-        color = Surface,
-        shape = RoundedCornerShape(9.dp),
-        border = BorderStroke(1.dp, Outline),
-        shadowElevation = 1.dp,
+    GlassPanel(
+        tint = Surface,
+        accent = Amber,
+        shape = RoundedCornerShape(11.dp),
+        shadowElevation = 7.dp,
     ) {
         Column(Modifier.padding(11.dp)) {
             Text("默认策略 · ${settings.baseTier.friendlyLabel}", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -726,7 +752,7 @@ private fun CustomRulePreview(settings: RuntimeSettings) {
     val socTarget2 = socRules.getOrNull(1)?.target ?: ControlTier.PAUSED
     val stepCount = (((t2 - t1) / 0.5f).toInt()).coerceAtLeast(1)
 
-    Surface(color = Surface, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, Outline), shadowElevation = 2.dp) {
+    GlassPanel(tint = Surface, accent = Cyan, shape = RoundedCornerShape(12.dp), shadowElevation = 8.dp) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("动态控制示意", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))

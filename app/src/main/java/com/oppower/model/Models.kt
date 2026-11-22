@@ -136,6 +136,8 @@ data class ChargeRecord(
 data class RuntimeSettings(
     val masterEnabled: Boolean = false,
     val baseTier: BaseTier = BaseTier.MAX_OUTPUT,
+    val nativeLevelZeroEnabled: Boolean = false,
+    val screenOffBoostEnabled: Boolean = false,
     val customRulesEnabled: Boolean = false,
     val customRules: ControlRules = ControlRules(),
     val liveNotificationEnabled: Boolean = true,
@@ -177,6 +179,7 @@ enum class ControllerPhase {
     TEMPERATURE_PAUSED,
     SOC_PAUSED,
     FULL_PAUSED,
+    SCREEN_OFF_PAUSED,
     ERROR,
 }
 
@@ -195,6 +198,7 @@ data class ControllerStatus(
     val phase: ControllerPhase = ControllerPhase.DISABLED,
     val message: String = "总开关未开启",
     val desiredGear: Int? = null,
+    val levelZeroMode: Boolean = false,
     val appliedCosa: Int = 0,
     val sessionSocLocked: Boolean = false,
     val observedGear: Int? = null,

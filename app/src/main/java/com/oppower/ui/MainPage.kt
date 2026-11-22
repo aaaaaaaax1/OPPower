@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
@@ -113,11 +114,8 @@ internal fun MainPage(
             points.any { it.acOnline } to points.any { !it.acOnline }
         }
     }
-    val pageBackground = remember {
-        Brush.verticalGradient(listOf(Background, Surface.copy(alpha = 0.54f)))
-    }
     var recordKind by remember { mutableStateOf<RecordKind?>(null) }
-    Box(Modifier.fillMaxSize().background(pageBackground)) {
+    GlassBackdrop {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -128,8 +126,21 @@ internal fun MainPage(
         item(key = "header") {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("OPPower", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 23.sp)
-                    Text("RMX8899 · ColorOS 17", color = TextSecondary, fontSize = 10.sp)
+                    Text(
+                        "OPPower",
+                        style = TextStyle(
+                            brush = Brush.linearGradient(listOf(TextPrimary, Cyan, TextPrimary)),
+                            fontWeight = FontWeight.Black,
+                            fontSize = 24.sp,
+                            letterSpacing = (-0.5).sp,
+                        ),
+                    )
+                    Text(
+                        "RMX8899  ·  ColorOS 17",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        letterSpacing = 0.45.sp,
+                    )
                 }
                 Text(
                     text = "加入 QQ 群",
@@ -140,11 +151,11 @@ internal fun MainPage(
                         .clickable(onClick = onJoinQq)
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                 )
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = SurfaceRaised,
-                    border = BorderStroke(1.dp, Outline),
+                GlassPanel(
                     modifier = Modifier.clickable(onClick = onOpenSettings),
+                    shape = RoundedCornerShape(10.dp),
+                    tint = SurfaceRaised,
+                    shadowElevation = 5.dp,
                 ) {
                     Text(
                         "⚙",
@@ -266,6 +277,13 @@ internal fun MainPage(
                     onOpenSettings = onOpenChargeSettings,
                     onToggle = { enabled ->
                         onSettingsChange { it.copy(masterEnabled = enabled) }
+                    },
+                )
+                LevelZeroCard(
+                    settings = settings,
+                    controllerStatus = controllerStatus,
+                    onToggle = { enabled ->
+                        onSettingsChange { it.copy(nativeLevelZeroEnabled = enabled) }
                     },
                 )
             }
@@ -407,11 +425,12 @@ private fun ControlIssueCard(
         waitingForPower -> "接上充电器和外接功率计，保持真实亮屏，应用会自动重新校准并开始控制。"
         else -> "已安全恢复系统默认。可能是系统仍在刷新充电状态，或当前前台应用切换了功率档。重新检测会重新读取当前状态；连续失败时请进入详细设置选择较温和的档位。"
     }
-    Surface(
-        color = AmberSurface,
+    GlassPanel(
         shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(1.dp, Amber.copy(alpha = 0.46f)),
-        shadowElevation = 2.dp,
+        tint = AmberSurface,
+        accent = Amber,
+        highlighted = true,
+        shadowElevation = 8.dp,
     ) {
         Column(Modifier.padding(13.dp)) {
             Text(title, color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -447,7 +466,7 @@ private fun PowerHero(
     settings: RuntimeSettings,
     controllerStatus: ControllerStatus,
 ) {
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(16.dp)
     val powerValue = remember(batteryState) {
         derivedStateOf {
             val battery = batteryState.value
@@ -463,39 +482,41 @@ private fun PowerHero(
     val temperatureValue = remember(batteryState) {
         derivedStateOf { "${batteryState.value.temperatureC.oneDecimal()}°C" }
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Brush.linearGradient(listOf(AccentSurface, SurfaceRaised, Surface)))
-            .border(1.dp, if (settings.masterEnabled) Cyan.copy(alpha = 0.34f) else Outline, shape),
+    val controlRequested = settings.masterEnabled || settings.nativeLevelZeroEnabled
+    val enabledLabel = when {
+        settings.nativeLevelZeroEnabled && !settings.masterEnabled -> "保活已开启"
+        controlRequested -> "快充已启用"
+        else -> "快充未启用"
+    }
+    GlassPanel(
+        modifier = Modifier.fillMaxWidth(),
+        shape = shape,
+        tint = AccentSurface,
+        accent = if (controlRequested) Cyan else Amber,
+        highlighted = controlRequested,
+        shadowElevation = 16.dp,
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            drawCircle(
-                color = Cyan.copy(alpha = 0.055f),
-                radius = size.width * 0.42f,
-                center = Offset(size.width * 0.94f, size.height * 0.04f),
-            )
-            drawCircle(
-                color = Cyan.copy(alpha = 0.022f),
-                radius = size.width * 0.31f,
-                center = Offset(size.width * 0.94f, size.height * 0.04f),
-            )
-        }
         Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = AccentSurface, shape = RoundedCornerShape(99.dp)) {
+                GlassPanel(
+                    shape = RoundedCornerShape(99.dp),
+                    tint = AccentSurface,
+                    accent = if (controlRequested) Cyan else Amber,
+                    highlighted = controlRequested,
+                    shadowElevation = 4.dp,
+                ) {
                     Row(
-                        Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(Modifier.size(6.dp).background(Cyan, CircleShape))
                         Spacer(Modifier.width(5.dp))
                         Text(
-                            if (settings.masterEnabled) "快充已启用" else "快充未启用",
-                            color = Cyan,
+                            enabledLabel,
+                            color = if (controlRequested) Cyan else Amber,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.3.sp,
                         )
                     }
                 }
@@ -508,9 +529,13 @@ private fun PowerHero(
                 color = TextSecondary,
                 fontSize = 10.sp,
             )
-            if (settings.masterEnabled) {
+            if (controlRequested) {
                 Text(
-                    "当前档位：${powerTierLabel(controllerStatus.desiredGear)}",
+                    "当前策略：" + if (settings.nativeLevelZeroEnabled) {
+                        levelZeroHeadline(controllerStatus)
+                    } else {
+                        powerTierLabel(controllerStatus.desiredGear)
+                    },
                     color = if (controllerStatus.phase == ControllerPhase.ACTIVE) Cyan else Amber,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -526,8 +551,30 @@ private fun PowerHero(
 private fun HeroPowerValue(powerValue: State<String>) {
     val power by powerValue
     Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 7.dp)) {
-        Text(power, color = TextPrimary, fontSize = 42.sp, fontWeight = FontWeight.Black)
-        Text(" W", color = TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(bottom = 7.dp))
+        Text(
+            power,
+            style = TextStyle(
+                brush = Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.96f),
+                        Cyan,
+                        lerp(TextPrimary, Cyan, 0.35f),
+                    ),
+                ),
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = (-1.2).sp,
+                fontFeatureSettings = "tnum",
+            ),
+        )
+        Text(
+            "W",
+            color = TextSecondary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 0.7.sp,
+            modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
+        )
     }
 }
 
@@ -540,6 +587,7 @@ private fun HeroBatteryFooter(
     val level by levelValue
     val fraction by levelFraction
     val temperature by temperatureValue
+    val shape = RoundedCornerShape(99.dp)
     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(level, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         Box(
@@ -547,14 +595,33 @@ private fun HeroBatteryFooter(
                 .weight(1f)
                 .padding(horizontal = 10.dp)
                 .height(5.dp)
-                .clip(RoundedCornerShape(99.dp))
-                .background(Outline),
+                .clip(shape)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Outline.copy(alpha = 0.78f),
+                            SurfaceRaised.copy(alpha = 0.5f),
+                            Outline.copy(alpha = 0.78f),
+                        ),
+                    ),
+                ),
         ) {
             Box(
                 Modifier
                     .fillMaxWidth(fraction)
                     .height(5.dp)
-                    .background(Cyan, RoundedCornerShape(99.dp)),
+                    .shadow(
+                        elevation = 7.dp,
+                        shape = shape,
+                        ambientColor = Cyan.copy(alpha = 0.7f),
+                        spotColor = Cyan.copy(alpha = 0.35f),
+                    )
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Cyan.copy(alpha = 0.62f), Cyan, Color.White.copy(alpha = 0.82f)),
+                        ),
+                        shape,
+                    ),
             )
         }
         Text(temperature, color = TextSecondary, fontSize = 10.sp)
@@ -571,14 +638,26 @@ private fun Metric(
 ) {
     val displayValue by value
     val highlighted = highlight?.value == true
-    Surface(
+    GlassPanel(
         modifier = modifier.clickable(enabled = onClick != null) { onClick?.invoke() },
-        color = Surface,
-        shape = RoundedCornerShape(9.dp),
-        border = BorderStroke(1.dp, Outline),
+        shape = RoundedCornerShape(12.dp),
+        tint = Surface,
+        accent = if (highlighted) Cyan else Cyan.copy(alpha = 0.72f),
+        highlighted = highlighted,
+        shadowElevation = 6.dp,
     ) {
         Column(Modifier.padding(horizontal = 9.dp, vertical = 8.dp)) {
-            Box(Modifier.width(18.dp).height(2.dp).background(Cyan.copy(alpha = 0.72f), RoundedCornerShape(2.dp)))
+            Box(
+                Modifier
+                    .width(18.dp)
+                    .height(2.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Cyan.copy(alpha = 0.28f), Cyan, Color.White.copy(alpha = 0.66f)),
+                        ),
+                        RoundedCornerShape(2.dp),
+                    ),
+            )
             Text(label, color = TextSecondary, fontSize = 9.sp)
             Text(
                 displayValue,
@@ -599,11 +678,12 @@ private fun ActionTile(
     onClick: (() -> Unit)? = null,
 ) {
     val displayValue by value
-    Surface(
+    GlassPanel(
         modifier = modifier.clickable(enabled = onClick != null) { onClick?.invoke() },
-        color = Surface,
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Outline),
+        shape = RoundedCornerShape(11.dp),
+        tint = Surface,
+        accent = Cyan.copy(alpha = 0.82f),
+        shadowElevation = 6.dp,
     ) {
         Column(Modifier.padding(horizontal = 6.dp, vertical = 8.dp)) {
             Text(label, color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Medium)
@@ -620,18 +700,13 @@ private fun ForceChargeCard(
     onToggle: (Boolean) -> Unit,
 ) {
     val shape = RoundedCornerShape(12.dp)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(
-                if (settings.masterEnabled) {
-                    Brush.linearGradient(listOf(AccentSurface, Surface))
-                } else {
-                    Brush.linearGradient(listOf(SurfaceRaised, Surface))
-                },
-            )
-            .border(1.dp, if (settings.masterEnabled) Cyan.copy(alpha = 0.34f) else Outline, shape),
+    GlassPanel(
+        modifier = Modifier.fillMaxWidth(),
+        shape = shape,
+        tint = if (settings.masterEnabled) AccentSurface else SurfaceRaised,
+        accent = if (settings.masterEnabled) Cyan else Amber,
+        highlighted = settings.masterEnabled,
+        shadowElevation = if (settings.masterEnabled) 12.dp else 7.dp,
     ) {
         Column(Modifier.padding(13.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -646,7 +721,12 @@ private fun ForceChargeCard(
                 }
                 Switch(checked = settings.masterEnabled, onCheckedChange = onToggle)
             }
-            Text(defaultSummary(settings), color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
+            Text(
+                defaultSummary(settings),
+                color = TextSecondary,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(top = 5.dp),
+            )
             if (settings.masterEnabled) {
                 Text(
                     "${controllerStatus.phase.label} · ${powerTierLabel(controllerStatus.desiredGear)}",
@@ -677,11 +757,86 @@ private fun ForceChargeCard(
     }
 }
 
+@Composable
+private fun LevelZeroCard(
+    settings: RuntimeSettings,
+    controllerStatus: ControllerStatus,
+    onToggle: (Boolean) -> Unit,
+) {
+    val active = settings.nativeLevelZeroEnabled
+    GlassPanel(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        tint = if (active) AccentSurface else SurfaceRaised,
+        accent = if (active) Cyan else Amber,
+        highlighted = active,
+        shadowElevation = if (active) 10.dp else 6.dp,
+    ) {
+        Column(Modifier.padding(13.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("高功率保活", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "（强制亮屏快充不行再试试这个）",
+                        color = TextSecondary,
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                }
+                Switch(
+                    checked = settings.nativeLevelZeroEnabled,
+                    onCheckedChange = onToggle,
+                )
+            }
+            Text(
+                "独立开关 · 达到 80% 或充满后自动暂停 · 拔电恢复普通充电 · 温度过高仍会保护",
+                color = TextSecondary,
+                fontSize = 9.sp,
+                lineHeight = 14.sp,
+                modifier = Modifier.padding(top = 7.dp),
+            )
+            if (settings.nativeLevelZeroEnabled) {
+                Text(
+                    levelZeroSummary(controllerStatus),
+                    color = if (controllerStatus.phase == ControllerPhase.ACTIVE) Cyan else Amber,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 5.dp),
+                )
+                Text(
+                    controllerStatus.message,
+                    color = TextSecondary,
+                    fontSize = 9.sp,
+                    lineHeight = 14.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun levelZeroHeadline(status: ControllerStatus): String = when {
+    status.phase == ControllerPhase.ACTIVE && status.levelZeroMode -> "高功率保活中"
+    status.phase == ControllerPhase.ERROR -> "高功率保活需要处理"
+    else -> "高功率保活已暂停"
+}
+
+private fun levelZeroSummary(status: ControllerStatus): String = when (status.phase) {
+    ControllerPhase.ACTIVE -> if (status.levelZeroMode) "正在保持高功率" else "等待系统确认"
+    ControllerPhase.ERROR -> "暂未生效 · 正在重试"
+    ControllerPhase.WAITING_FOR_POWER -> "等待接电"
+    ControllerPhase.DISABLED -> "已关闭"
+    ControllerPhase.FULL_PAUSED -> "已充满 · 已恢复正常充电"
+    ControllerPhase.SOC_PAUSED -> "电量保护 · 已恢复正常充电"
+    ControllerPhase.SCREEN_OFF_PAUSED -> "息屏暂停 · 已恢复正常充电"
+    ControllerPhase.TEMPERATURE_PAUSED -> "温度保护 · 已恢复正常充电"
+}
+
 private fun defaultSummary(settings: RuntimeSettings): String {
     return if (settings.customRulesEnabled) {
         "自定义：${settings.customRules.temperatureRules.size} 个温度条件 · ${settings.customRules.socRules.size} 个电量条件"
     } else when (settings.baseTier) {
-        com.oppower.model.BaseTier.MAX_OUTPUT -> "保持 gear 0 · 80%暂停 · 充满暂停 · 系统热控继续生效"
+        com.oppower.model.BaseTier.MAX_OUTPUT -> "持续输出 · 80%暂停 · 充满暂停 · 温度过高自动保护"
         else -> "低于 43°C 随温度调整 · 43°C/80%暂停 · 充满暂停"
     }
 }
@@ -729,11 +884,12 @@ private fun RecordCard(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
-    Surface(
+    GlassPanel(
         modifier = modifier.clickable(onClick = onClick),
-        color = Surface,
-        shape = RoundedCornerShape(9.dp),
-        border = BorderStroke(1.dp, Outline),
+        shape = RoundedCornerShape(12.dp),
+        tint = Surface,
+        accent = color,
+        shadowElevation = 7.dp,
     ) {
         Column(Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -829,10 +985,13 @@ private fun RecordDialog(
                     Text("暂无记录。完成一次充电或放电后，这里会显示完整统计、结束原因和历史详情。", color = TextSecondary)
                 }
                 selected?.let { record ->
-                    Surface(
-                        color = AccentSurface,
+                    GlassPanel(
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(11.dp),
-                        border = BorderStroke(1.dp, Cyan.copy(alpha = 0.42f)),
+                        tint = AccentSurface,
+                        accent = Cyan,
+                        highlighted = true,
+                        shadowElevation = 8.dp,
                     ) {
                         Column(Modifier.fillMaxWidth().padding(12.dp)) {
                             Text(
@@ -865,11 +1024,13 @@ private fun RecordDialog(
                     Text("历史记录", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
                 }
                 records.asReversed().forEach { record ->
-                    Surface(
-                        modifier = Modifier.clickable { selected = record },
-                        color = if (selected == record) AccentSurface else SurfaceRaised,
+                    GlassPanel(
+                        modifier = Modifier.fillMaxWidth().clickable { selected = record },
+                        tint = if (selected == record) AccentSurface else SurfaceRaised,
+                        accent = if (selected == record) Cyan else Amber,
+                        highlighted = selected == record,
                         shape = RoundedCornerShape(9.dp),
-                        border = BorderStroke(1.dp, if (selected == record) Cyan else Outline),
+                        shadowElevation = if (selected == record) 6.dp else 3.dp,
                     ) {
                         Column(Modifier.fillMaxWidth().padding(10.dp)) {
                             Text(
@@ -1059,10 +1220,11 @@ private fun TemperatureRealtimeChart(points: List<ChartPoint>) {
 
 @Composable
 private fun ChartLoadingCard(title: String) {
-    Surface(
-        color = Surface,
-        shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(1.dp, Outline),
+    GlassPanel(
+        shape = RoundedCornerShape(13.dp),
+        tint = Surface,
+        accent = Cyan,
+        shadowElevation = 7.dp,
     ) {
         Column(Modifier.fillMaxWidth().padding(9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1105,10 +1267,11 @@ private fun ChartCard(
             }
         }
     }
-    Surface(
-        color = Surface,
-        shape = RoundedCornerShape(11.dp),
-        border = BorderStroke(1.dp, Outline),
+    GlassPanel(
+        shape = RoundedCornerShape(13.dp),
+        tint = Surface,
+        accent = Cyan,
+        shadowElevation = 7.dp,
     ) {
         Column(Modifier.fillMaxWidth().padding(9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1216,5 +1379,6 @@ internal val ControllerPhase.label: String
         ControllerPhase.TEMPERATURE_PAUSED -> "温度暂停"
         ControllerPhase.SOC_PAUSED -> "电量暂停"
         ControllerPhase.FULL_PAUSED -> "已充满"
+        ControllerPhase.SCREEN_OFF_PAUSED -> "息屏暂停"
         ControllerPhase.ERROR -> "需要处理"
     }

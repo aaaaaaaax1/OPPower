@@ -28,31 +28,31 @@ data class UiColors(
 )
 
 private val darkColors = UiColors(
-    background = Color(0xFF0E1317),
-    surface = Color(0xFF151B20),
-    surfaceRaised = Color(0xFF1B2228),
-    accent = Color(0xFF79D6C1),
-    secondary = Color(0xFFCDAA70),
-    textPrimary = Color(0xFFEDF3F2),
-    textSecondary = Color(0xFF96A3A7),
-    danger = Color(0xFFFF8178),
-    outline = Color(0xFF29343A),
-    accentSurface = Color(0xFF15252A),
-    secondarySurface = Color(0xFF24241C),
+    background = Color(0xFF0A232A),
+    surface = Color(0xFF15353C),
+    surfaceRaised = Color(0xFF1A3F46),
+    accent = Color(0xFF79E6D1),
+    secondary = Color(0xFFE6C184),
+    textPrimary = Color(0xFFEDF6F4),
+    textSecondary = Color(0xFF9FB2B4),
+    danger = Color(0xFFFF8880),
+    outline = Color(0xFF2C4A50),
+    accentSurface = Color(0xFF143338),
+    secondarySurface = Color(0xFF30291D),
 )
 
 private val lightColors = UiColors(
-    background = Color(0xFFF5F6F7),
-    surface = Color(0xFFFFFFFF),
-    surfaceRaised = Color(0xFFECEFF1),
-    accent = Color(0xFF2F7164),
-    secondary = Color(0xFF786D5A),
-    textPrimary = Color(0xFF181B1E),
-    textSecondary = Color(0xFF5D646A),
+    background = Color(0xFFEDF4F2),
+    surface = Color(0xFFF9FCFB),
+    surfaceRaised = Color(0xFFE7EFED),
+    accent = Color(0xFF247A6B),
+    secondary = Color(0xFF7B6540),
+    textPrimary = Color(0xFF142022),
+    textSecondary = Color(0xFF5B6A6D),
     danger = Color(0xFFB84D46),
-    outline = Color(0xFFD8DCE0),
-    accentSurface = Color(0xFFE7EFEC),
-    secondarySurface = Color(0xFFF0ECE5),
+    outline = Color(0xFFCDDAD7),
+    accentSurface = Color(0xFFDDEDE8),
+    secondarySurface = Color(0xFFF1E9DB),
 )
 
 private fun paletteColors(palette: ThemePalette, dark: Boolean): UiColors {

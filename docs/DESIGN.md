@@ -2,7 +2,7 @@
 
 ## 1. 产品目标
 
-OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，通过 Shizuku 写入系统持久设置 `cosa_ctc_value`，把 OPPower 按热控基础档与 `cosa` 计算的 gear 调整到目标档位。总开关开启后，用户划掉界面或把应用放到后台，前台服务仍继续控制；拔电、关闭开关或达到安全阈值时恢复系统默认。
+OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，通过 Shizuku 写入系统持久设置 `cosa_ctc_value`，把 OPPower 按热控基础档与 `cosa` 计算的 gear 调整到目标档位。总开关开启后，用户划掉界面或把应用放到后台，前台服务仍继续控制；拔电、关闭该模式或达到安全阈值时恢复系统默认。主页面另有一个独立于总开关的“高功率保活”开关，即使“强制亮屏快充”总开关关闭，只要该开关开启且满足接电条件，控制服务仍会运行。
 
 成功标准是外接功率计显示持续且可复现的功率，不使用单次冲高、LV 循环补发、冻结 Athena/Battery、分屏、旁路充电、伪造温度或停用原生热保护。
 
@@ -23,9 +23,13 @@ OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，�
 
 控制器在每个 1 秒周期重新读取 `cosa_ctc_value` 和 `Thermal Levels`，直接计算当前 gear。基础热控档位变化时，立即按新基础档计算新的 `cosa`，再得到新的计算 gear，不需要切换应用，也不先写 `cosa=0`。目标变化、首次开启或检测到外部把 `cosa` 改错时，当前周期直接写入计算值并回读。 `getCurThermalPolicy` 中只用于诊断的 `chargeVal`/`speedChargeAdd` 最多缓存 3 秒，不参与 gear 计算；`cosa` 与 `Thermal Levels` 仍每秒核对，因此不会降低基础档变化、目标切换、接电和设置变化后的响应速度。
 
-OPPower 不再调用 `OplusBatteryService setChargingLevel`，也不再发送 `set_charge(0,-2)` 广播。该广播接收器要求发送方持有 `oplus.permission.OPLUS_COMPONENT_SAFE`；Shizuku/ADB 只有 shell UID，命令即使返回 `Broadcast completed` 也没有送达接收器，实际不会进入 `D1()`。控制会话只保留“写 `cosa` → 回读 → 触发一次热控重算”。
+常规 gear 模式不调用 `OplusBatteryService setChargingLevel`，也不发送 `set_charge(0,-2)` 广播。该广播接收器要求发送方持有 `oplus.permission.OPLUS_COMPONENT_SAFE`；Shizuku/ADB 只有 shell UID，命令即使返回 `Broadcast completed` 也没有送达接收器，实际不会进入 `D1()`。普通控制会话只保留“写 `cosa` → 回读 → 触发一次热控重算”。
 
-Beta17 起，OPPower 不再读取或写入 GuardElf `SmartChgMode`。beta8 在只写 `cosa`、只触发一次热控重算时曾持续约 7 分钟达到 30 W 以上；后续加入 `SmartChgMode=0` 改变了这一自然策略条件，并带来额外 Binder 写入。当前控制会话只包含目标 `cosa` 的写入和一次热控刷新。
+2026-11-22 新增、2026-11-23 修正为真正独立于总开关的“高功率保活”（内部使用 `setChargingLevel 0`）是默认关闭的显式 opt-in 模式，不在常规 gear 规则内。界面名称下显示“（强制亮屏快充不行再试试这个）”。开启后即使“强制亮屏快充”总开关关闭，控制器仍先恢复 `cosa=0`，再立即并最多每 3 秒一次下发 `setChargingLevel 0`；不读取温度分档、不写普通 gear 目标，也不经过 `RuleEngine` 选档。关闭总开关不会停止保活；80% 本次暂停、100%/FULL 暂停、拔电、关闭保活（且总开关也未开启）或息屏暂停时，先下发安全级 `setChargingLevel 2`，再恢复 `cosa=0`。系统原生温度保护继续运行。白名单只允许 `setChargingLevel 0` 和 `setChargingLevel 2`，其他档位及拼接命令仍拒绝。
+
+二级页“息屏也生效”默认关闭。关闭时屏幕熄灭会暂停全部充电增强并执行上述安全恢复；开启后，普通快充和高功率保活都允许在息屏时继续。该开关只决定是否因息屏暂停，不改变 80%、充满、拔电和 Shizuku 可用性保护。
+
+Beta17 起，OPPower 不再读取或写入 GuardElf `SmartChgMode`。beta8 在只写 `cosa`、只触发一次热控重算时曾持续约 7 分钟达到 30 W 以上；后续加入 `SmartChgMode=0` 改变了这一自然策略条件，并带来额外 Binder 写入。当前常规控制会话只包含目标 `cosa` 的写入和一次热控刷新。
 
 `getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示和验收；代码只从中读取 `chargeVal` 作独立诊断。即使 `policy.gear` 仍是旧值，也不会影响 OPPower 的 `基础档 + cosa` 结果。`chargeVal` 不参与 gear 求和。2026-10-26 源码复核确认：原始 `policy.charge=-2` 在系统 `HeatSourceController.e()` 中会归一化成充电 level 0，再交给 `D1()`；它本身不等于 HAL 已生效。页面 `chargeVal=--` 仅表示诊断读取缺失，不能把它等同于 `-2` 或 cooldown 0（详见操作书 34.3）。热控复杂场景可能把同一个计算 gear 0 映射成 `chargeVal=12, speedChargeAdd=0`，因此 OPPower 不把回读的 `chargeVal` 当作 gear 计算依据，也不会用另一条原生充电命令覆盖热控结果。
 
@@ -62,7 +66,7 @@ RMX8899 的下表只记录“基础档为 8、场景其他影响当时为 0”�
 
 例如基础档为 6、目标为 0 时，所需 `cosa=-6`，计算结果也是 gear 0。基础档变成 7 后，目标仍为 0 时立即改为 `cosa=-7`。
 
-只有拔电、关闭总开关、电量暂停、充满或用户点击“一键恢复”才恢复系统默认 `cosa=0`，并在实际写入时触发一次系统重算。系统驱动的服务销毁和重建不属于恢复条件；服务保持已持久化的控制意图，并在重建后继续计算目标。普通回读异常、短时策略为空或一次重算触发失败只保持当前偏移并继续读取，不会先把功率清零。软件不读取、不写入 `single_speed_charge_state`。
+常规 gear 模式只有拔电、关闭总开关、电量暂停、充满或用户点击“一键恢复”才恢复系统默认 `cosa=0`；高功率保活独立判断自身开关，不能因为总开关关闭而恢复。实际写入时触发一次系统重算。系统驱动的服务销毁和重建不属于恢复条件；服务保持已持久化的控制意图，并在重建后继续计算目标。普通回读异常、短时策略为空或一次重算触发失败只保持当前偏移并继续读取，不会先把功率清零。软件不读取、不写入 `single_speed_charge_state`。
 
 ## 3. 用户档位
 
@@ -82,9 +86,10 @@ RMX8899 的下表只记录“基础档为 8、场景其他影响当时为 0”�
 - 当前功率、电流 mA、电压 V、温度、电量、电池状态、供电方式。
 - 充放电记录摘要，以及上下分开的功率曲线、温度曲线；横轴为系统时间。
 - 原始记录最多保留 24 小时；可视曲线显示最近 8 小时，默认显示 2 小时窗口，并可分别左右拖动，横轴每 15 分钟一个时间节点。
-- 图表使用简洁的深色背景、细分隔线和两种清晰的数据色，不采用大面积渐变或装饰效果。
+- 图表内容保持清晰、克制的网格和两种数据色；外层与全应用统一采用液态玻璃容器、主题色边缘高光和柔和阴影，避免装饰遮住数据。
 - 始终显示“强制亮屏快充”卡片及主开关，点击进入详细设置。
 - 页面数据每秒刷新一次；功率和温度曲线使用 LLPower 采样节奏：充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒。界面关闭或划掉最近任务后，前台服务仍继续积累曲线，原始记录最多保留 24 小时。
+视觉层采用克制的深色液态玻璃体系：页面背景是低对比的深青纵向渐变，仅保留一处很淡的冷色柔光，不使用彩色光斑、漂移光带或整面白雾；卡片使用半透明深色填充、发丝级高光边、主卡片左上角的局部反光与柔和投影。玻璃层次通过透明度、边缘亮度和阴影表达，背景保持静止，避免装饰和动态光效干扰读数。页面层级、控件位置、点击区域和字体比例逻辑不变，主题切换会同步更新玻璃层次、阴影、强调色和浅色/深色对比。
 
 ### 首次启动说明
 
@@ -158,7 +163,7 @@ T ≥ T2                        → 温度条件 2 的目标
 - 20–40 W 大档内部按 0.5°C 分段，从本档实测 gear 集合等距选择；温度越低使用越高功率端。
 - 10–30 W 均衡档内部只看温度；电量只决定是否暂停整个 gear 策略。
 - 用户选择基础档、修改自定义规则或切换目标时不做防抖；当前控制周期按“目标 − 基础档”动态计算目标 `cosa`，只写一次并触发一次系统重算。
-- 计算 gear 只由 `Thermal Levels[0] + cosa` 得到；`policy.gear` 缓存不参与计算或验收，`chargeVal` 只显示为诊断字段。同一目标保持期间不重复写入 `cosa`、不重排 `m2()`，也不调用原生 `setChargingLevel`。
+- 计算 gear 只由 `Thermal Levels[0] + cosa` 得到；`policy.gear` 缓存不参与计算或验收，`chargeVal` 只显示为诊断字段。常规目标保持期间不重复写入 `cosa`、不重排 `m2()`，也不调用原生 `setChargingLevel`；只有用户显式开启高功率保活时才走独立的 3 秒复写路径。
 - 暂停策略、SOC 锁定与 100% 充满规则优先于温度恢复。
 - 原生热保护持续运行，应用不会伪装或关闭温度来源。
 
@@ -166,15 +171,15 @@ T ≥ T2                        → 温度条件 2 的目标
 
 前台服务负责采样、状态通知和唯一一次设置写入。界面只更新共享状态，避免界面与后台重复写同一设置。
 
-- AC 在线时前台服务每 1 秒读取基础档和 `cosa` 并重算档位；基础档变化、目标变化或外部 `cosa` 漂移时写入一次。页面数据每秒刷新，曲线按 LLPower 的 3/5/180 秒节奏采样。AC 断开后恢复 `cosa=0` 并释放前台服务，下一次接电由电源广播立即建立新会话。
+- 常规 gear 模式下，AC 在线时前台服务每 1 秒读取基础档和 `cosa` 并重算档位；基础档变化、目标变化或外部 `cosa` 漂移时写入一次。页面数据每秒刷新，曲线按 LLPower 的 3/5/180 秒节奏采样。AC 断开后恢复 `cosa=0` 并释放前台服务，下一次接电由电源广播立即建立新会话。
 - 用户划掉界面后服务继续运行，主开关保存于 SharedPreferences。
-- 关闭总开关、AC 断开、SOC 暂停或充满时恢复 `cosa=0`。系统销毁服务属于后台生命周期事件，不能据此撤销已下发的控制意图：`START_STICKY` 重建后继续按当前基础档计算并保持目标。
+- 常规 gear 模式关闭总开关、AC 断开、SOC 暂停或充满时恢复 `cosa=0`；若高功率保活仍开启，关闭总开关不会中止该独立路径。关闭最后一个充电增强开关时，服务必须先完成安全级恢复再退出。系统销毁服务属于后台生命周期事件，不能据此撤销已下发的控制意图：`START_STICKY` 重建后继续按当前开关和基础档计算并保持目标。
 - 服务启动时先读取设备当前 `cosa`；正常启用和切换都直接覆盖 `cosa`，不先清零，也不依赖持久基础档。
 - Android 无法保证进程被强制终止或 Shizuku 停止后的即时回滚；界面与文档保留这项限制。
 - 插拔电广播会立即唤醒控制服务；屏幕开关广播控制熄屏刷新频率、自动关闭和亮屏恢复。
-- 状态通知在接电时存在，即使总开关关闭也显示“亮屏快充未启用”；拔电或通知功能关闭时撤掉。Android 16 及以上使用 `Notification.ProgressStyle`、`battery_live_update_v2` 通道、`android.requestPromotedOngoing` 和 `POST_PROMOTED_NOTIFICATIONS` 对齐 LLPower 的实时活动卡片；ColorOS 的“流体云显示实时活动”关闭时系统会拒绝提升，必须由用户在 OPPower 的系统通知设置中开启。旧系统保留普通通知和 `android.app.preferSmallIcon` 兼容路径。
-- 通知栏不再提供“本次关闭”动作；关闭控制统一通过总开关或一键恢复完成。
-- 不启动独立 shell 看门狗，不加入高频或低频守门轮询。控制器只在目标、基础档或外部偏移变化时写入并触发一次热控重算；稳定期间只读，AC 断开后恢复并退出。
+- 状态通知在接电时存在，仅开启高功率保活时显示对应保活状态，即使总开关关闭也不会显示“未启用”；拔电或通知功能关闭时撤掉。Android 16 及以上使用 `Notification.ProgressStyle`、`battery_live_update_v2` 通道、`android.requestPromotedOngoing` 和 `POST_PROMOTED_NOTIFICATIONS` 对齐 LLPower 的实时活动卡片；ColorOS 的“流体云显示实时活动”关闭时系统会拒绝提升，必须由用户在 OPPower 的系统通知设置中开启。旧系统保留普通通知和 `android.app.preferSmallIcon` 兼容路径。
+- 通知栏不再提供“本次关闭”动作；普通快充、高功率保活分别通过各自开关或一键恢复关闭。
+- 不启动独立 shell 看门狗，不加入高频或低频守门轮询。常规控制器只在目标、基础档或外部偏移变化时写入并触发一次热控重算；稳定期间只读，AC 断开后恢复并退出。高功率保活是唯一例外，按 3 秒节流重发其固定保活命令。
 
 ## 9. Shizuku 与权限
 
@@ -193,7 +198,7 @@ dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus
 
 `readBatteryFallback()` 是独立的只读 AIDL 方法，固定执行 `dumpsys battery`，不接受调用方传命令；user service 内部超时 1.5 秒，主进程等待服务绑定最多 350 ms。它只在上述伪零条件触发，不扩大任意 shell 权限。LLPower 2.0.4 实际有两条采样路径：`BatteryEngine` 使用 `CURRENT_NOW → CURRENT_AVERAGE → current_now/main current_now/batt_current`，`ChargeEngine` 在 sysfs 缺失时解析 `dumpsys battery`；OPPower 按同样顺序组合这两条只读路径。
 
-不接受任意 shell、分号拼接、命令替换或其他设置名。`oplus_float_window_show` 与回退入口 `oplus_camera_3rd_activity` 只允许 `0/1/00/01` 四种等价写法，用于数值不变的监听触发；浮窗设置缺失时由控制器注入一次 `0`。`setChargingLevel`、`SmartChgMode` 和 `set_charge` 广播均不在白名单。除 Shizuku 自身授予的能力外，不绕过签名、SELinux、HAL 或 OEM 组件权限。
+不接受任意 shell、分号拼接、命令替换或其他设置名。`oplus_float_window_show` 与回退入口 `oplus_camera_3rd_activity` 只允许 `0/1/00/01` 四种等价写法，用于数值不变的监听触发；浮窗设置缺失时由控制器注入一次 `0`。`setChargingLevel` 只允许完整的 `0` 和恢复安全级 `2` 两条固定命令，其他档位和拼接形式拒绝；`SmartChgMode` 和 `set_charge` 广播仍不在白名单。除 Shizuku 自身授予的能力外，不绕过签名、SELinux、HAL 或 OEM 组件权限。
 
 ## 10. 当前限制
 

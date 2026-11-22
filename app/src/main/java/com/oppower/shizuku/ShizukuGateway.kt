@@ -134,6 +134,21 @@ class ShizukuGateway(context: Context) : ChargingGateway {
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus")
 
     /**
+     * Opt-in native charge-level control used only by the explicit Level 0
+     * hold mode. The BatteryService debug entry executes D1() inside the
+     * system process and reaches the charger HAL; the shell identity alone
+     * cannot call the protected Binder directly.
+     */
+    override fun requestNativeChargeLevel(level: Int): Boolean {
+        if (level !in NATIVE_CHARGE_LEVELS) return false
+        val output = execute(
+            "dumpsys activity service com.oplus.battery/.OplusBatteryService " +
+                "setChargingLevel $level",
+        )
+        return output.contains("set charging level = $level")
+    }
+
+    /**
      * Reads current and voltage from one privileged `dumpsys battery` sample. This
      * path is used only when BatteryManager reports an AC-online zero, matching
      * LLPower's shell-level fallback without adding any new shell-command surface.
@@ -201,6 +216,7 @@ class ShizukuGateway(context: Context) : ChargingGateway {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         private const val COMMAND_TIMEOUT_MILLIS = 4_000L
         private const val BATTERY_SAMPLE_TIMEOUT_MILLIS = 350L
+        private val NATIVE_CHARGE_LEVELS = setOf(0, 2)
     }
 }
 
