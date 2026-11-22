@@ -67,6 +67,7 @@ class ChargeControlService : Service() {
     private var lastNotificationAt = 0L
     private var lastOverlayEnabled: Boolean? = null
     @Volatile private var controlLoopStarted = false
+    @Volatile private var pendingImmediateAction: String? = null
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -115,6 +116,8 @@ class ChargeControlService : Service() {
             try {
                 while (true) {
                     val cycleStartedAt = SystemClock.elapsedRealtime()
+                    val immediateAction = pendingImmediateAction
+                    if (immediateAction != null) pendingImmediateAction = null
                     var keepRunning = true
                     try {
                         val settings = cachedSettings
@@ -133,7 +136,7 @@ class ChargeControlService : Service() {
                             lastOverlayEnabled = settings.overlayKeepAliveEnabled
                             overlayScope.launch { overlay.sync(settings.overlayKeepAliveEnabled) }
                         }
-                        syncStatusNotification(status, battery, settings)
+                        syncStatusNotification(status, battery, settings, force = immediateAction != null)
                         if (settings.historyEnabled) {
                             runCatching {
                                 historyStore.record(battery, screenOn = screenOn)
@@ -141,6 +144,14 @@ class ChargeControlService : Service() {
                             }.onFailure {
                                 android.util.Log.w("OPPower", "History sample failed", it)
                             }
+                        }
+                        if (immediateAction != null) {
+                            android.util.Log.i(
+                                "OPPower",
+                                "Immediate control action=$immediateAction " +
+                                    "phase=${status.phase} targetGear=${status.desiredGear} " +
+                                    "cosa=${status.appliedCosa}",
+                            )
                         }
                         if (!battery.acOnline) {
                             if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
@@ -185,6 +196,22 @@ class ChargeControlService : Service() {
         cachedSettings = prefs.load()
         val settings = cachedSettings
         val enabled = settings.masterEnabled || settings.liveNotificationEnabled
+        if (action == ACTION_RESUME_NOTIFICATION) {
+            if (!enabled) return START_NOT_STICKY
+            notificationDismissed = false
+        }
+        if (action in IMMEDIATE_CONTROL_ACTIONS && !enabled) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val loopWasRunning = controlLoopStarted
+        if (action in IMMEDIATE_CONTROL_ACTIONS) {
+            // A new loop performs its first cycle immediately. An existing loop
+            // receives the conflated wake and runs the action without spawning a
+            // second evaluator that would duplicate Shizuku queries and writes.
+            pendingImmediateAction = action
+        }
         if (enabled) {
             // Android requires a foreground notification promptly. Start it with
             // an inexpensive placeholder, then fill real battery data on IO.
@@ -196,10 +223,9 @@ class ChargeControlService : Service() {
                 foregroundStarted = true
             }
             startControlLoop()
-        }
-        if (action == ACTION_RESUME_NOTIFICATION) {
-            if (!enabled) return START_NOT_STICKY
-            notificationDismissed = false
+            if (loopWasRunning && action in IMMEDIATE_CONTROL_ACTIONS) {
+                ChargeControlBus.requestUpdate()
+            }
         }
         if (action == ACTION_RESTORE_ALL) {
             scope.launch {
@@ -223,21 +249,7 @@ class ChargeControlService : Service() {
                 }
             }
         }
-        if (action in IMMEDIATE_CONTROL_ACTIONS) {
-            ChargeControlBus.requestUpdate()
-            scope.launch {
-                val battery = batteryReader.snapshot(settings)
-                val status = controller.evaluate(settings, battery)
-                ChargeControlBus.status.value = status
-                syncStatusNotification(status, battery, settings, force = true)
-                android.util.Log.i(
-                    "OPPower",
-                    "Immediate control action=$action phase=${status.phase} " +
-                        "targetGear=${status.desiredGear} cosa=${status.appliedCosa}",
-                )
-                if (!enabled) stopSelf()
-            }
-        }
+
         return if (enabled) START_STICKY else START_NOT_STICKY
     }
 

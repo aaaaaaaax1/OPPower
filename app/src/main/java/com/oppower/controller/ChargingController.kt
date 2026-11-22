@@ -39,6 +39,8 @@ class ChargingController(
     private var temperatureCandidateSince = 0L
     private var controlSettingsSnapshot: ControlSettings? = null
     private var pausedFromGear: Int? = null
+    private var cachedDiagnosticPolicy: ThermalPolicy? = null
+    private var cachedDiagnosticPolicyAtMillis = Long.MIN_VALUE
 
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
@@ -155,7 +157,7 @@ class ChargingController(
             val thermalStatus = readThermalStatus()
             val baseGear = thermalStatus.baseGear
                 ?: throw IllegalStateException("系统热控基础档位暂未返回")
-            val policy = runCatching { readPolicy() }.getOrDefault(ThermalPolicy())
+            val policy = runCatching { readPolicyForDiagnostics(nowMillis()) }.getOrDefault(ThermalPolicy())
             val chargeVal = policy.chargeVal
             val resolvedBeforeWrite = GearCalculator.resolve(
                 policy = policy,
@@ -246,7 +248,7 @@ class ChargingController(
             throw IllegalStateException("请先完成 Shizuku 授权")
         }
         val cosa = shizuku.readGlobal("cosa_ctc_value").toIntOrNull()
-        val chargeVal = runCatching { readPolicy().chargeVal }.getOrNull()
+        val chargeVal = runCatching { readPolicyFresh().chargeVal }.getOrNull()
         return GearCalculator.resolve(
             policy = ThermalPolicy(chargeVal = chargeVal),
             thermalStatus = readThermalStatus(),
@@ -274,6 +276,8 @@ class ChargingController(
         temperatureCandidateSince = 0L
         controlSettingsSnapshot = null
         pausedFromGear = null
+        cachedDiagnosticPolicy = null
+        cachedDiagnosticPolicyAtMillis = Long.MIN_VALUE
     }
 
     private fun confirmGear(
@@ -359,6 +363,8 @@ class ChargingController(
         temperatureCandidateSince = 0L
         pausedFromGear = null
         controlSettingsSnapshot = null
+        cachedDiagnosticPolicy = null
+        cachedDiagnosticPolicyAtMillis = Long.MIN_VALUE
     }
 
     private fun writeCosa(value: Int): Boolean {
@@ -370,10 +376,31 @@ class ChargingController(
         return true
     }
 
-    private fun requestThermalRefresh(): Boolean =
-        runCatching { shizuku.requestThermalPolicyRefresh() }.getOrDefault(false)
+    private fun requestThermalRefresh(): Boolean {
+        val requested = runCatching { shizuku.requestThermalPolicyRefresh() }.getOrDefault(false)
+        if (requested) {
+            cachedDiagnosticPolicy = null
+            cachedDiagnosticPolicyAtMillis = Long.MIN_VALUE
+        }
+        return requested
+    }
 
-    private fun readPolicy(): ThermalPolicy {
+    /**
+     * chargeVal and speedChargeAdd describe the native policy but do not drive
+     * OPPower's gear calculation. Cache only this diagnostic query so the
+     * one-second thermal-status and cosa checks remain untouched.
+     */
+    private fun readPolicyForDiagnostics(now: Long): ThermalPolicy {
+        val cached = cachedDiagnosticPolicy
+        val age = now - cachedDiagnosticPolicyAtMillis
+        if (cached != null && age in 0L..POLICY_DIAGNOSTIC_CACHE_MILLIS) return cached
+        return readPolicyFresh().also {
+            cachedDiagnosticPolicy = it
+            cachedDiagnosticPolicyAtMillis = now
+        }
+    }
+
+    private fun readPolicyFresh(): ThermalPolicy {
         val raw = shizuku.readThermalPolicy()
         val charge = Regex("chargeVal:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val speed = Regex("speedChargeAdd:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -386,6 +413,7 @@ class ChargingController(
 
     private companion object {
         const val TEMPERATURE_PAUSE_CANDIDATE = -1
+        const val POLICY_DIAGNOSTIC_CACHE_MILLIS = 3_000L
     }
 
     private data class ControlSettings(

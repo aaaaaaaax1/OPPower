@@ -21,7 +21,7 @@ OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，�
 所需 cosa = 目标 gear - 热控基础档位
 ```
 
-控制器在每个 1 秒周期重新读取 `cosa_ctc_value` 和 `Thermal Levels`，直接计算当前 gear。基础热控档位变化时，立即按新基础档计算新的 `cosa`，再得到新的计算 gear，不需要切换应用，也不先写 `cosa=0`。目标变化、首次开启或检测到外部把 `cosa` 改错时，当前周期直接写入计算值并回读。
+控制器在每个 1 秒周期重新读取 `cosa_ctc_value` 和 `Thermal Levels`，直接计算当前 gear。基础热控档位变化时，立即按新基础档计算新的 `cosa`，再得到新的计算 gear，不需要切换应用，也不先写 `cosa=0`。目标变化、首次开启或检测到外部把 `cosa` 改错时，当前周期直接写入计算值并回读。 `getCurThermalPolicy` 中只用于诊断的 `chargeVal`/`speedChargeAdd` 最多缓存 3 秒，不参与 gear 计算；`cosa` 与 `Thermal Levels` 仍每秒核对，因此不会降低基础档变化、目标切换、接电和设置变化后的响应速度。
 
 OPPower 不再调用 `OplusBatteryService setChargingLevel`，也不再发送 `set_charge(0,-2)` 广播。该广播接收器要求发送方持有 `oplus.permission.OPLUS_COMPONENT_SAFE`；Shizuku/ADB 只有 shell UID，命令即使返回 `Broadcast completed` 也没有送达接收器，实际不会进入 `D1()`。控制会话只保留“写 `cosa` → 回读 → 触发一次热控重算”。
 

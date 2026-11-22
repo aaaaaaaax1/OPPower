@@ -410,3 +410,9 @@ Thermal Levels 写入验证：
 - 充电记录的平均功率、平均电流、平均温度和充入 mAh 改为按相邻采样实际间隔进行梯形加权；3 秒、5 秒和未充电 180 秒采样都能兼容。超过 5 分钟的异常空档会跳过加权与积分，峰值和最高温度仍保留全部样本。
 - 内存中不再为每条记录复制完整原始点列表。SQLite 继续保留 24 小时用于记录摘要，主页面和曲线总线只驻留最近 8 小时；当前会话改为 O(1) 增量累计，新采样不再重扫整段会话。
 - 新增不等间隔梯形平均、异常空档排除、批量与增量结果一致、8 小时内存窗口测试。完整 62 项 JVM 单测通过（0 failure、0 error）；`:app:testDebugUnitTest`、`:app:assembleDebug`、`:app:lintDebug` 通过，lint 为 0 errors、20 warnings。
+## beta27 无损控制循环优化（2026-11-22）
+
+- 设置变化、接电和通知恢复动作不再并发执行“立即 evaluate + 控制循环再次 evaluate”；服务只通过 conflated 唤醒通道执行一轮即时控制，并保留该动作的强制通知与日志。
+- `cosa_ctc_value` 与 `Thermal Levels` 仍每秒读取，基础档变化、外部偏移漂移和用户档位切换仍会在当前周期重算并写入。仅用于诊断的 `getCurThermalPolicy.chargeVal/speedChargeAdd` 增加 3 秒缓存，热控刷新成功时立即失效缓存；用户手动“读取档位”仍绕过缓存读取新鲜值。
+- 新增测试确认连续两个 1 秒控制周期只执行一次诊断 policy 查询，但热控状态仍每周期查询；超过 3 秒后才重新读取 policy。完整 63 项 JVM 单测通过（0 failure、0 error）；`:app:testDebugUnitTest`、`:app:assembleDebug`、`:app:lintDebug` 通过，lint 为 0 errors、20 warnings。
+- Debug APK 已覆盖安装到 RMX8899，保留现有设置并成功启动。功率提速 A/B 待电量降至 60%–70% 后在相同充电器、线材、温度、前台场景和计算 gear 下执行；本轮没有新增或恢复任何原生充电级写入。

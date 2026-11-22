@@ -288,6 +288,32 @@ class ChargingControllerTest {
 
 
 
+    @Test
+    fun diagnosticPolicyIsCachedWithoutSlowingGearStatusChecks() {
+        val gateway = FakeChargingGateway(cosa = -8, gear = 0, baseGear = 8)
+        var now = 1_000L
+        val controller = ChargingController(gateway, nowMillis = { now })
+        val settings = settings(BaseTier.MAX_OUTPUT)
+
+        controller.evaluate(settings, battery())
+        gateway.policyReads = 0
+        gateway.statusReads = 0
+
+        now = 2_000L
+        controller.evaluate(settings, battery())
+        now = 3_000L
+        controller.evaluate(settings, battery())
+
+        assertEquals(1, gateway.policyReads)
+        assertEquals(2, gateway.statusReads)
+
+        now = 5_001L
+        controller.evaluate(settings, battery())
+
+        assertEquals(2, gateway.policyReads)
+        assertEquals(3, gateway.statusReads)
+    }
+
     private fun settings(baseTier: BaseTier) = RuntimeSettings(
         masterEnabled = true,
         baseTier = baseTier,
@@ -316,6 +342,8 @@ class ChargingControllerTest {
         val writes = mutableListOf<Int>()
 
         var refreshRequests = 0
+        var policyReads = 0
+        var statusReads = 0
 
         override fun readGlobal(name: String): String {
             assertEquals("cosa_ctc_value", name)
@@ -329,10 +357,12 @@ class ChargingControllerTest {
         }
 
         override fun readThermalPolicy(): String {
+            policyReads += 1
             return "categoryName: $policyCategory\ngearVal: $gear\nchargeVal: ${policyChargeVal ?: "--"}\nspeedChargeAdd: ${policySpeedAdd ?: "--"}"
         }
 
         override fun readThermalStatus(): String {
+            statusReads += 1
             return "Thermal status = $baseGear\nThermal Temperature = 35.0\nThermal Levels = [$baseGear]"
         }
 
