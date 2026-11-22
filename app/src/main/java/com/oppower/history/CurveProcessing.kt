@@ -58,13 +58,34 @@ object CurveProcessing {
     private const val TEMPERATURE_MIN_DISPLAY_C = -20f
     private const val TEMPERATURE_MAX_DISPLAY_C = 120f
 
+    /**
+     * Keeps the in-memory chart window aligned with what the UI can render.
+     * SQLite still retains the full record-summary window.
+     */
+    fun historyWithinWindow(
+        points: List<ChartPoint>,
+        endMillis: Long? = null,
+        windowMillis: Long = HISTORY_WINDOW_MS,
+    ): List<ChartPoint> {
+        if (points.isEmpty()) return emptyList()
+        val resolvedEnd = endMillis ?: points.last().epochMillis
+        val cutoff = (resolvedEnd - windowMillis.coerceAtLeast(0L)).coerceAtLeast(0L)
+        var low = 0
+        var high = points.size
+        while (low < high) {
+            val middle = (low + high) ushr 1
+            if (points[middle].epochMillis < cutoff) low = middle + 1 else high = middle
+        }
+        return if (low == 0) points else points.subList(low, points.size).toList()
+    }
+
     fun processPower(
         points: List<ChartPoint>,
         windowStart: Long,
         windowEnd: Long,
         recordIntervalMs: Long = 3_000L,
     ): CurveSnapshot {
-        val source = normalized(points, windowStart, windowEnd) { it.powerW }
+        val source = normalized(points.filter(::isUsablePowerPoint), windowStart, windowEnd) { it.powerW }
         if (source.isEmpty()) {
             return CurveSnapshot(emptyList(), emptyList(), resolvePowerAxis(emptyList()))
         }
@@ -287,6 +308,13 @@ object CurveProcessing {
                     remainingWeight
             point.copy(value = smoothed + upwardCorrection)
         }
+    }
+
+    private fun isUsablePowerPoint(point: ChartPoint): Boolean {
+        if (!point.powerW.isFinite() || abs(point.powerW) > POWER_MAX_DISPLAY_W) return false
+        // A charging sample with no electrical signal is a transient driver read,
+        // not a real 0 W plateau. Keep it out of the persisted visualization.
+        return !(point.acOnline && point.levelPercent < 99 && abs(point.powerW) < 0.05f)
     }
 
     private fun localPowerScale(source: List<CurvePoint>, index: Int, radius: Int): Float {

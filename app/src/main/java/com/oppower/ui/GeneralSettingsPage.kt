@@ -562,11 +562,19 @@ private fun HardwareSettingsPage(
             )
         }
         SettingsSection("当前读数") {
-            StatusRow("电流", "${state.battery.currentMa} mA", true)
+            StatusRow("电流", if (state.battery.sampleValid) "${state.battery.currentMa} mA" else "—", true)
             SettingsDivider()
-            StatusRow("电压", "${(state.battery.voltageMv / 1000f).oneDecimal()} V", true)
+            StatusRow(
+                "电压",
+                if (state.battery.sampleValid) "${(state.battery.voltageMv / 1000f).oneDecimal()} V" else "—",
+                true,
+            )
             SettingsDivider()
-            StatusRow("电池功率", "${state.battery.powerW.oneDecimal()} W", true)
+            StatusRow(
+                "电池功率",
+                if (state.battery.sampleValid) "${state.battery.powerW.oneDecimal()} W" else "—",
+                true,
+            )
             Text(
                 "当前机型 RMX8899 为单电芯，默认无需开启双芯修正。若读数方向不正确，先尝试“反转电流正负”。",
                 color = TextSecondary,

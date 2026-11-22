@@ -11,9 +11,24 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+enum class PrivilegedBatterySource(val protocolCode: Int) {
+    UNKNOWN(0),
+    BATTERY_SYSFS(1),
+    MAIN_SYSFS(2),
+    BATTERY_SERVICE_FORCED(3),
+    DUMPSYS(4),
+    ;
+
+    companion object {
+        fun fromProtocolCode(code: Int): PrivilegedBatterySource =
+            entries.firstOrNull { it.protocolCode == code } ?: UNKNOWN
+    }
+}
+
 data class PrivilegedBatteryReading(
     val currentMa: Int,
     val voltageMv: Int,
+    val source: PrivilegedBatterySource = PrivilegedBatterySource.UNKNOWN,
 )
 
 class BatteryReader(
@@ -60,9 +75,7 @@ class BatteryReader(
             else -> readFirstNonZeroCurrent()
         }
         val primaryCurrentMa = normalizeCurrentToMa(rawCurrent)
-        val fallback = if (shouldReadPrivilegedFallback(
-                currentMa = primaryCurrentMa,
-                voltageMv = primaryVoltageMv,
+        val fallback = if (shouldProbePrivilegedBattery(
                 levelPercent = percent,
                 status = status,
                 acOnline = acOnline,
@@ -119,24 +132,23 @@ class BatteryReader(
             levelPercent = percent,
             status = status,
             acOnline = acOnline,
+            sampleValid = stableMeasurement.valid,
         )
     }
 }
 
-internal fun shouldReadPrivilegedFallback(
-    currentMa: Float,
-    voltageMv: Int,
+internal fun shouldProbePrivilegedBattery(
     levelPercent: Int,
     status: Int,
     acOnline: Boolean,
 ): Boolean = acOnline &&
     levelPercent < 99 &&
-    status != BatteryManager.BATTERY_STATUS_FULL &&
-    (currentMa == 0f || voltageMv !in VALID_VOLTAGE_RANGE)
+    status != BatteryManager.BATTERY_STATUS_FULL
 
 internal data class ResolvedBatteryMeasurement(
     val currentMa: Float,
     val voltageMv: Int,
+    val valid: Boolean = true,
 )
 
 /**
@@ -146,7 +158,7 @@ internal data class ResolvedBatteryMeasurement(
  * lasting beyond the hold window are accepted immediately.
  */
 internal class CurrentSampleStabilizer(
-    private val holdMillis: Long = 3_500L,
+    private val holdMillis: Long = 5_000L,
 ) {
     private var lastReliable: ResolvedBatteryMeasurement? = null
     private var lastReliableAtMillis = 0L
@@ -163,7 +175,7 @@ internal class CurrentSampleStabilizer(
             return ResolvedBatteryMeasurement(currentMa, voltageMv)
         }
 
-        if (abs(currentMa) > ZERO_CURRENT_EPSILON) {
+        if (isPlausibleMeasurement(currentMa, voltageMv)) {
             val sample = ResolvedBatteryMeasurement(currentMa, voltageMv)
             lastReliable = sample
             lastReliableAtMillis = nowMillis
@@ -177,13 +189,15 @@ internal class CurrentSampleStabilizer(
         }
 
         lastReliable = null
-        return ResolvedBatteryMeasurement(currentMa, voltageMv)
-    }
-
-    private companion object {
-        const val ZERO_CURRENT_EPSILON = 0.5f
+        return ResolvedBatteryMeasurement(currentMa = 0f, voltageMv = 0, valid = false)
     }
 }
+
+internal fun isPlausibleMeasurement(currentMa: Float, voltageMv: Int): Boolean =
+    currentMa.isFinite() &&
+        abs(currentMa) > ZERO_CURRENT_EPSILON &&
+        abs(currentMa) <= MAX_PLAUSIBLE_CURRENT_MA &&
+        voltageMv in VALID_VOLTAGE_RANGE
 
 internal fun resolveBatteryMeasurement(
     primaryCurrentMa: Float,
@@ -198,16 +212,10 @@ internal fun resolveBatteryMeasurement(
         fallbackCurrent.toLong() !in invalidCurrentMarkers &&
         abs(fallbackCurrent) <= MAX_PLAUSIBLE_CURRENT_MA
     val fallbackVoltageIsUsable = fallback.voltageMv in VALID_VOLTAGE_RANGE
-    val useFallbackCurrent = primaryCurrentMa == 0f && fallbackCurrentIsUsable
+    val primaryIsUsable = isPlausibleMeasurement(primaryCurrentMa, primaryVoltageMv)
     return ResolvedBatteryMeasurement(
-        currentMa = if (useFallbackCurrent) fallbackCurrent.toFloat() else primaryCurrentMa,
-        voltageMv = if ((useFallbackCurrent || primaryVoltageMv !in VALID_VOLTAGE_RANGE) &&
-            fallbackVoltageIsUsable
-        ) {
-            fallback.voltageMv
-        } else {
-            primaryVoltageMv
-        },
+        currentMa = if (fallbackCurrentIsUsable) fallbackCurrent.toFloat() else primaryCurrentMa,
+        voltageMv = if (fallbackVoltageIsUsable) fallback.voltageMv else primaryVoltageMv,
     )
 }
 
@@ -220,6 +228,7 @@ private val invalidCurrentMarkers = setOf(
 
 private val VALID_VOLTAGE_RANGE = 3_000..5_500
 private const val MAX_PLAUSIBLE_CURRENT_MA = 20_000
+private const val ZERO_CURRENT_EPSILON = 0.5f
 
 private val currentSysfsPaths = listOf(
     "/sys/class/power_supply/battery/current_now",

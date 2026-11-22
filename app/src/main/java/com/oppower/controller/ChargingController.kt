@@ -17,38 +17,13 @@ interface ChargingGateway {
 
     fun readGlobal(name: String): String
     fun putGlobal(name: String, value: Int)
-    fun readSystemSetting(name: String): String
-    fun putSystemSetting(name: String, value: Int)
     fun readThermalPolicy(): String
     fun readThermalStatus(): String
     fun requestThermalPolicyRefresh(): Boolean
 }
 
-interface ChargingControlStateStore {
-    fun loadOriginalSmartChargeSwitch(): Int?
-    fun saveOriginalSmartChargeSwitch(value: Int): Boolean
-    fun clearOriginalSmartChargeSwitch(): Boolean
-}
-
-class InMemoryChargingControlStateStore : ChargingControlStateStore {
-    private var originalSmartChargeSwitch: Int? = null
-
-    override fun loadOriginalSmartChargeSwitch(): Int? = originalSmartChargeSwitch
-
-    override fun saveOriginalSmartChargeSwitch(value: Int): Boolean {
-        originalSmartChargeSwitch = value
-        return true
-    }
-
-    override fun clearOriginalSmartChargeSwitch(): Boolean {
-        originalSmartChargeSwitch = null
-        return true
-    }
-}
-
 class ChargingController(
     private val shizuku: ChargingGateway,
-    private val controlState: ChargingControlStateStore = InMemoryChargingControlStateStore(),
     private val rules: RuleEngine = RuleEngine(),
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
@@ -57,7 +32,6 @@ class ChargingController(
     private var lastFull = false
     private var currentCosa = 0
     private var cosaInitialized = false
-    private var originalSmartChargeSwitch: Int? = null
     private var lastAppliedGear: Int? = null
     private var lastObservedGear: Int? = null
     private var appliedTier: ControlTier? = null
@@ -69,7 +43,7 @@ class ChargingController(
     @Synchronized
     fun evaluate(settings: RuntimeSettings, battery: BatterySnapshot): ControllerStatus {
         if (!settings.masterEnabled) {
-            restoreBoth()
+            restoreCosa()
             lastAcForSession = battery.acOnline
             return ControllerStatus(ControllerPhase.DISABLED, "总开关未开启")
         }
@@ -89,18 +63,18 @@ class ChargingController(
             lastAcForSession = battery.acOnline
 
             if (!battery.acOnline) {
-                restoreBoth()
+                restoreCosa()
                 return ControllerStatus(ControllerPhase.WAITING_FOR_POWER, "等待接入电源")
             }
 
             val full = battery.levelPercent >= 100 || battery.status == 5
             if (full) {
-                restoreBoth()
+                restoreCosa()
                 lastFull = true
                 return ControllerStatus(ControllerPhase.FULL_PAUSED, "电量已充满：已恢复系统默认")
             }
             if (lastFull) {
-                restoreBoth()
+                restoreCosa()
                 return ControllerStatus(ControllerPhase.FULL_PAUSED, "本次插电已充满，拔电后重新开始")
             }
 
@@ -109,7 +83,7 @@ class ChargingController(
                 sessionSocLocked = true
             }
             if (sessionSocLocked) {
-                restoreBoth()
+                restoreCosa()
                 return ControllerStatus(
                     ControllerPhase.SOC_PAUSED,
                     "电量达到 $pauseSoc%：本次插电已暂停快充增强",
@@ -135,7 +109,7 @@ class ChargingController(
                     return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
                 }
                 if (current == null) {
-                    restoreBoth()
+                    restoreCosa()
                     return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
                 }
                 val now = nowMillis()
@@ -160,7 +134,7 @@ class ChargingController(
                         observedGear = lastObservedGear,
                     )
                 }
-                restoreBoth()
+                restoreCosa()
                 pausedFromGear = current
                 appliedTier = ControlTier.PAUSED
                 return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
@@ -194,8 +168,6 @@ class ChargingController(
             val requiredCosa = target - baseGear
             val targetReachable = requiredCosa in GearCalculator.COSA_MIN..GearCalculator.COSA_MAX
             val desiredCosa = GearCalculator.clampCosaForTarget(target, baseGear)
-
-            ensureSmartChargeSwitchDisabled()
 
             val targetChanged = lastAppliedGear != target
             val needsApply = currentCosa != desiredCosa || targetChanged
@@ -284,7 +256,7 @@ class ChargingController(
 
     @Synchronized
     fun restoreAll(): ControllerStatus {
-        restoreBoth()
+        restoreCosa()
         resetSession()
         return ControllerStatus(ControllerPhase.DISABLED, "已恢复系统默认")
     }
@@ -370,63 +342,8 @@ class ChargingController(
         cosaInitialized = true
     }
 
-    private fun restoreBoth() {
-        runCatching { restoreSmartChargeSwitch() }
+    private fun restoreCosa() {
         runCatching { restoreOffset() }
-    }
-
-    private fun ensureSmartChargeSwitchDisabled() {
-        if (originalSmartChargeSwitch == null) {
-            val remembered = runCatching {
-                controlState.loadOriginalSmartChargeSwitch()
-            }.getOrNull()?.takeIf { it == 0 || it == 1 }
-            val original = remembered ?: runCatching {
-                shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
-            }.getOrNull()?.takeIf { it == 0 || it == 1 } ?: return
-            if (remembered == null && !runCatching {
-                    controlState.saveOriginalSmartChargeSwitch(original)
-                }.getOrDefault(false)
-            ) {
-                return
-            }
-            originalSmartChargeSwitch = original
-        }
-        val current = runCatching {
-            shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
-        }.getOrNull() ?: return
-        if (current == 0) return
-        runCatching {
-            shizuku.putSystemSetting(SMART_CHARGE_SWITCH, 0)
-            val readBack = shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
-            check(readBack == 0) { "smart_charge_switch_state 回读不一致" }
-        }
-    }
-
-    private fun restoreSmartChargeSwitch() {
-        // A recreated service may first observe an unplugged charger or a
-        // disabled master switch. Reload the original value from persistent
-        // state instead of depending on an earlier active control cycle to
-        // populate the in-memory field.
-        val original = originalSmartChargeSwitch ?: runCatching {
-            controlState.loadOriginalSmartChargeSwitch()
-        }.getOrNull()?.takeIf { it == 0 || it == 1 } ?: return
-        originalSmartChargeSwitch = original
-        val current = runCatching {
-            shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull()
-        }.getOrNull() ?: return
-        if (current == original) {
-            originalSmartChargeSwitch = null
-            runCatching { controlState.clearOriginalSmartChargeSwitch() }
-            return
-        }
-        val restored = runCatching {
-            shizuku.putSystemSetting(SMART_CHARGE_SWITCH, original)
-            shizuku.readSystemSetting(SMART_CHARGE_SWITCH).toIntOrNull() == original
-        }.getOrDefault(false)
-        if (restored) {
-            originalSmartChargeSwitch = null
-            runCatching { controlState.clearOriginalSmartChargeSwitch() }
-        }
     }
 
     private fun restoreOffset() {
@@ -469,7 +386,6 @@ class ChargingController(
 
     private companion object {
         const val TEMPERATURE_PAUSE_CANDIDATE = -1
-        const val SMART_CHARGE_SWITCH = "smart_charge_switch_state"
     }
 
     private data class ControlSettings(

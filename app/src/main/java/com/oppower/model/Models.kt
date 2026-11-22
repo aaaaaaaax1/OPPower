@@ -24,6 +24,7 @@ data class BatterySnapshot(
     val levelPercent: Int = 0,
     val status: Int = 1,
     val acOnline: Boolean = false,
+    val sampleValid: Boolean = false,
 ) {
     val isCharging: Boolean
         get() = acOnline && (status == 2 || status == 5)
@@ -127,9 +128,9 @@ data class ChargeRecord(
     val endVoltageV: Float = 0f,
     val peakCurrentMa: Int = 0,
     val averageCurrentMa: Int = 0,
+    val averageTemperatureC: Float = 0f,
     val chargeDeltaMah: Int? = null,
     val endReason: String = "拔电",
-    val points: List<ChartPoint> = emptyList(),
 )
 
 data class RuntimeSettings(

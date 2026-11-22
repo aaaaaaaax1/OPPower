@@ -65,6 +65,7 @@ import com.oppower.history.CurveAxis
 import com.oppower.history.CurveProcessing
 import com.oppower.history.CurveSegment
 import com.oppower.history.CurveSnapshot
+import com.oppower.history.buildChargeRecord
 import com.oppower.model.BatterySnapshot
 import com.oppower.model.ChartPoint
 import com.oppower.model.ChargeRecord
@@ -165,7 +166,9 @@ internal fun MainPage(
             val currentValue = remember(batteryState, settingsState) {
                 derivedStateOf {
                     val battery = batteryState.value
-                    if (settingsState.value.showCurrentInAmpere) {
+                    if (!battery.sampleValid) {
+                        "—"
+                    } else if (settingsState.value.showCurrentInAmpere) {
                         "${(abs(battery.currentMa) / 1000f).oneDecimal()} A"
                     } else {
                         "${battery.currentMa} mA"
@@ -173,7 +176,14 @@ internal fun MainPage(
                 }
             }
             val voltageValue = remember(batteryState) {
-                derivedStateOf { "${(batteryState.value.voltageMv / 1000f).oneDecimal()} V" }
+                derivedStateOf {
+                    val battery = batteryState.value
+                    if (battery.sampleValid) {
+                        "${(battery.voltageMv / 1000f).oneDecimal()} V"
+                    } else {
+                        "—"
+                    }
+                }
             }
             val temperatureValue = remember(batteryState) {
                 derivedStateOf { "${batteryState.value.temperatureC.oneDecimal()} °C" }
@@ -439,7 +449,10 @@ private fun PowerHero(
 ) {
     val shape = RoundedCornerShape(14.dp)
     val powerValue = remember(batteryState) {
-        derivedStateOf { batteryState.value.powerW.oneDecimal() }
+        derivedStateOf {
+            val battery = batteryState.value
+            if (battery.sampleValid) battery.powerW.oneDecimal() else "—"
+        }
     }
     val levelValue = remember(batteryState) {
         derivedStateOf { "${batteryState.value.levelPercent}%" }
@@ -490,7 +503,11 @@ private fun PowerHero(
                 Text(controllerStatus.phase.label, color = TextSecondary, fontSize = 10.sp)
             }
             HeroPowerValue(powerValue)
-            Text("实时电池功率", color = TextSecondary, fontSize = 10.sp)
+            Text(
+                if (batteryState.value.sampleValid) "实时电池功率" else "功率读数暂不可用",
+                color = TextSecondary,
+                fontSize = 10.sp,
+            )
             if (settings.masterEnabled) {
                 Text(
                     "当前档位：${powerTierLabel(controllerStatus.desiredGear)}",
@@ -790,21 +807,9 @@ private fun RecordDialog(
     val relevantPoints = points.filter { if (kind == RecordKind.CHARGE) it.acOnline else !it.acOnline }
     val fallback = remember(records, relevantPoints) {
         records.lastOrNull() ?: relevantPoints.takeIf { it.size >= 2 }?.let { group ->
-            ChargeRecord(
-                startedAtMillis = group.first().epochMillis,
-                endedAtMillis = group.last().epochMillis,
-                startPercent = group.first().levelPercent,
-                endPercent = group.last().levelPercent,
-                peakPowerW = group.maxOf { it.powerW },
-                averagePowerW = group.map { it.powerW }.average().toFloat(),
-                maxTemperatureC = group.maxOf { it.temperatureC },
-                startVoltageV = group.first().voltageMv / 1000f,
-                endVoltageV = group.last().voltageMv / 1000f,
-                peakCurrentMa = group.maxOf { abs(it.currentMa) },
-                averageCurrentMa = group.map { abs(it.currentMa) }.average().toInt(),
-                chargeDeltaMah = null,
-                endReason = if (kind == RecordKind.CHARGE) "当前充电中" else "当前放电中",
+            buildChargeRecord(
                 points = group,
+                endReason = if (kind == RecordKind.CHARGE) "当前充电中" else "当前放电中",
             )
         }
     }
@@ -900,7 +905,6 @@ private fun RecordDetailRows(record: ChargeRecord) {
     val durationMinutes = ((record.endedAtMillis - record.startedAtMillis).coerceAtLeast(0L) / 60_000.0)
     val deltaPercent = record.endPercent - record.startPercent
     val ratePerHour = if (durationMinutes > 0) deltaPercent / (durationMinutes / 60.0) else 0.0
-    val averageTemp = record.points.map { it.temperatureC }.takeIf { it.isNotEmpty() }?.average()?.toFloat() ?: 0f
     val rows = listOf(
         "充电时长" to (record.endedAtMillis - record.startedAtMillis).durationText(),
         "平均每小时充电" to "${String.format(Locale.getDefault(), "%.1f", ratePerHour)}%/h",
@@ -911,7 +915,7 @@ private fun RecordDetailRows(record: ChargeRecord) {
         "峰值电流" to "${record.peakCurrentMa} mA",
         "平均电流" to "${record.averageCurrentMa} mA",
         "最高温度" to "${record.maxTemperatureC.oneDecimal()} °C",
-        "平均温度" to "${averageTemp.oneDecimal()} °C",
+        "平均温度" to "${record.averageTemperatureC.oneDecimal()} °C",
         "电荷量变化" to (record.chargeDeltaMah?.let { "+$it mAh" } ?: "--"),
         "结束原因" to record.endReason,
     )

@@ -15,12 +15,14 @@ object ChartHistoryBus {
     fun mergeLoaded(loaded: List<ChartPoint>) {
         points.update { current ->
             if (current.isEmpty()) {
-                loaded
+                CurveProcessing.historyWithinWindow(loaded)
             } else {
-                (loaded + current)
-                    .associateBy { it.epochMillis }
-                    .values
-                    .sortedBy { it.epochMillis }
+                CurveProcessing.historyWithinWindow(
+                    (loaded + current)
+                        .associateBy { it.epochMillis }
+                        .values
+                        .sortedBy { it.epochMillis },
+                )
             }
         }
     }
@@ -30,9 +32,13 @@ object ChartHistoryBus {
             when {
                 current.isEmpty() -> listOf(point)
                 current.last().epochMillis == point.epochMillis -> current
-                current.last().epochMillis > point.epochMillis ->
-                    (current + point).associateBy { it.epochMillis }.values.sortedBy { it.epochMillis }
-                else -> current + point
+                current.last().epochMillis > point.epochMillis -> CurveProcessing.historyWithinWindow(
+                    (current + point)
+                        .associateBy { it.epochMillis }
+                        .values
+                        .sortedBy { it.epochMillis },
+                )
+                else -> CurveProcessing.historyWithinWindow(current + point)
             }
         }
     }
@@ -74,6 +80,7 @@ class ChartHistoryStore(context: Context) {
         if (previous > 0L && (nowMillis <= previous || nowMillis - previous < interval)) {
             return@synchronized null
         }
+        if (!battery.sampleValid) return@synchronized null
 
         val point = ChartPoint(
             epochMillis = nowMillis,

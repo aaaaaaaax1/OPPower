@@ -6,7 +6,6 @@ import com.oppower.model.ControllerPhase
 import com.oppower.model.RuntimeSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -190,80 +189,6 @@ class ChargingControllerTest {
     }
 
     @Test
-    fun smartChargeSwitchDisablesWhileActiveAndRestoresOnPause() {
-        val gateway = FakeChargingGateway(cosa = 0, gear = 8, smartChargeSwitch = 1)
-        val controller = ChargingController(gateway)
-        val enabled = settings(BaseTier.MAX_OUTPUT)
-
-        controller.evaluate(enabled, battery())
-        controller.evaluate(enabled, battery())
-
-        assertEquals(listOf(0), gateway.smartChargeSwitchWrites)
-        assertEquals(0, gateway.smartChargeSwitch)
-
-        controller.evaluate(enabled.copy(masterEnabled = false), battery())
-
-        assertEquals(listOf(0, 1), gateway.smartChargeSwitchWrites)
-        assertEquals(1, gateway.smartChargeSwitch)
-    }
-
-    @Test
-    fun smartChargeOriginalSurvivesServiceControllerRecreation() {
-        val state = FakeChargingControlStateStore()
-        val firstGateway = FakeChargingGateway(cosa = 0, gear = 8, smartChargeSwitch = 1)
-        val firstController = ChargingController(firstGateway, state)
-        val enabled = settings(BaseTier.MAX_OUTPUT)
-
-        firstController.evaluate(enabled, battery())
-
-        assertEquals(1, state.originalSmartChargeSwitch)
-        assertEquals(0, firstGateway.smartChargeSwitch)
-
-        val restartedGateway = FakeChargingGateway(
-            cosa = -8,
-            gear = 8,
-            smartChargeSwitch = 0,
-        )
-        val restartedController = ChargingController(restartedGateway, state)
-
-        restartedController.evaluate(enabled, battery())
-
-        assertEquals(1, state.originalSmartChargeSwitch)
-        assertTrue(restartedGateway.smartChargeSwitchWrites.isEmpty())
-
-        restartedController.evaluate(
-            enabled,
-            battery().copy(acOnline = false, status = 3),
-        )
-
-        assertEquals(listOf(1), restartedGateway.smartChargeSwitchWrites)
-        assertEquals(1, restartedGateway.smartChargeSwitch)
-        assertNull(state.originalSmartChargeSwitch)
-    }
-
-    @Test
-    fun persistedSmartChargeOriginalRestoresWhenRecreatedControllerFirstSeesDisconnect() {
-        val state = FakeChargingControlStateStore().apply {
-            originalSmartChargeSwitch = 1
-        }
-        val gateway = FakeChargingGateway(
-            cosa = -8,
-            gear = 8,
-            smartChargeSwitch = 0,
-        )
-        val controller = ChargingController(gateway, state)
-
-        controller.evaluate(
-            settings(BaseTier.MAX_OUTPUT),
-            battery().copy(acOnline = false, status = 3),
-        )
-
-        assertEquals(listOf(1), gateway.smartChargeSwitchWrites)
-        assertEquals(1, gateway.smartChargeSwitch)
-        assertNull(state.originalSmartChargeSwitch)
-    }
-
-    @Test
     fun refreshFailureDoesNotRewriteSameCalculatedTarget() {
         val gateway = FakeChargingGateway(cosa = 0, gear = 8, refreshSucceeds = false)
         val controller = ChargingController(gateway)
@@ -385,16 +310,10 @@ class ChargingControllerTest {
         var policyCategory: String = "test_scene",
         var policyChargeVal: Int? = 12,
         var policySpeedAdd: Int? = 1,
-        var smartChargeSwitch: Int = 1,
     ) : ChargingGateway {
         override val isAvailable = true
         override val hasPermission = true
         val writes = mutableListOf<Int>()
-        val smartChargeSwitchWrites = mutableListOf<Int>()
-
-
-
-
 
         var refreshRequests = 0
 
@@ -407,17 +326,6 @@ class ChargingControllerTest {
             assertEquals("cosa_ctc_value", name)
             writes += value
             cosa = value
-        }
-
-        override fun readSystemSetting(name: String): String {
-            assertEquals("smart_charge_switch_state", name)
-            return smartChargeSwitch.toString()
-        }
-
-        override fun putSystemSetting(name: String, value: Int) {
-            assertEquals("smart_charge_switch_state", name)
-            smartChargeSwitchWrites += value
-            smartChargeSwitch = value
         }
 
         override fun readThermalPolicy(): String {
@@ -434,19 +342,4 @@ class ChargingControllerTest {
         }
     }
 
-    private class FakeChargingControlStateStore : ChargingControlStateStore {
-        var originalSmartChargeSwitch: Int? = null
-
-        override fun loadOriginalSmartChargeSwitch(): Int? = originalSmartChargeSwitch
-
-        override fun saveOriginalSmartChargeSwitch(value: Int): Boolean {
-            originalSmartChargeSwitch = value
-            return true
-        }
-
-        override fun clearOriginalSmartChargeSwitch(): Boolean {
-            originalSmartChargeSwitch = null
-            return true
-        }
-    }
 }

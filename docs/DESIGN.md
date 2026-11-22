@@ -9,6 +9,7 @@ OPPower 在 realme Neo8 RMX8899、ColorOS 17、真实亮屏且 AC 在线时，�
 温度降档、恢复、暂停和规则判断统一使用 OPPower 自己显示的电池温度。该温度来自 Android 电池广播的 `BatteryManager.EXTRA_TEMPERATURE`，界面、通知、记录和控制器共用同一个 `BatterySnapshot.temperatureC`，不会混用前台应用热控文本或厂商内部温度。
 
 曲线处理与 LLPower 一致：原始记录最多保留 24 小时，可视历史为最近 8 小时，默认显示 2 小时；充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒采样。功率使用 30–90 秒聚合、稳健中心值、向上峰值保留、9 点平滑和尾部稳定；温度使用 60 秒聚合、孤立抖动修正和 7 点三角平滑。超过 7 分钟的间隔会拆成独立线段，功率纵轴按 10 W 步进，温度纵轴至少覆盖 5°C。两条曲线保留 OPPower 自己的界面样式，并可分别拖动。
+为支持长时间充电，SQLite 仍保留 24 小时原始采样，但进程内曲线只保留最近 8 小时。当前会话使用增量累计器，不再在每个新采样点重建整段记录；历史充电记录统一按相邻采样的实际时间间隔做梯形加权，功率、电流、温度和充入 mAh 共用这一规则。超过 5 分钟的空档不参与平均值与积分，正常未充电的 180 秒采样仍计入。记录模型只保存统计摘要，不重复保留整段原始点。
 
 ## 2. 闭环控制
 
@@ -26,7 +27,7 @@ OPPower 不再调用 `OplusBatteryService setChargingLevel`，也不再发送 `s
 
 Beta17 起，OPPower 不再读取或写入 GuardElf `SmartChgMode`。beta8 在只写 `cosa`、只触发一次热控重算时曾持续约 7 分钟达到 30 W 以上；后续加入 `SmartChgMode=0` 改变了这一自然策略条件，并带来额外 Binder 写入。当前控制会话只包含目标 `cosa` 的写入和一次热控刷新。
 
-`getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示和验收；代码只从中读取 `chargeVal` 作独立诊断。即使 `policy.gear` 仍是旧值，也不会影响 OPPower 的 `基础档 + cosa` 结果。`chargeVal` 不参与 gear 求和。热控复杂场景可能把同一个计算 gear 0 映射成 `chargeVal=12, speedChargeAdd=0`，因此 OPPower 不把回读的 `chargeVal` 当作 gear 计算依据，也不会用另一条原生充电命令覆盖热控结果。
+`getCurThermalPolicy` 的 `gearVal` 缓存不参与控制、显示和验收；代码只从中读取 `chargeVal` 作独立诊断。即使 `policy.gear` 仍是旧值，也不会影响 OPPower 的 `基础档 + cosa` 结果。`chargeVal` 不参与 gear 求和。2026-10-26 源码复核确认：原始 `policy.charge=-2` 在系统 `HeatSourceController.e()` 中会归一化成充电 level 0，再交给 `D1()`；它本身不等于 HAL 已生效。页面 `chargeVal=--` 仅表示诊断读取缺失，不能把它等同于 `-2` 或 cooldown 0（详见操作书 34.3）。热控复杂场景可能把同一个计算 gear 0 映射成 `chargeVal=12, speedChargeAdd=0`，因此 OPPower 不把回读的 `chargeVal` 当作 gear 计算依据，也不会用另一条原生充电命令覆盖热控结果。
 
 界面显示 `基础档 + cosa = 计算档位`，并单独显示 `chargeVal`。`cosa` 回读成功且计算结果等于目标后即标记达到目标。
 
@@ -34,7 +35,7 @@ Beta17 起，OPPower 不再读取或写入 GuardElf `SmartChgMode`。beta8 在�
 
 beta20 起取消自动 gear 1 保护。目标为 gear 0 时，控制器始终按“基础档 + cosa = 0”立即下发并刷新，不因温度自动改写目标。电池功率使用与 LLPower 相同的 `BatteryManager.getLongProperty(CURRENT_NOW)`，仅当它返回 0 时回退到 `CURRENT_AVERAGE`。页面 1 秒采样与历史数据库写入分离，单次采样或写库异常不会终止刷新循环。
 
-beta21 在控制有效期间读取并保存 `smart_charge_switch_state` 原值，控制生效时把它写为 `0`，暂停、拔电、充满或关闭总开关时恢复原值；原值另存于 SharedPreferences，因此服务被系统销毁并重建后仍能恢复。稳定运行期间不重复写入。该参数只作为补充提升，不能替代 `cosa` 闭环，也不能据此宣称能达到固定 30 W。设置页的系统通知权限、通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 连接状态统一从 Android 与 Shizuku 实时读取，并在启动、恢复前台和授权回调后刷新，不再依赖界面缓存。
+beta27 已按用户要求撤销 `smart_charge_switch_state` 补充提升。当前版本不读取、不写入、不持久化该设置，也不再向 Shizuku 暴露对应命令；控制会话只维护 `cosa_ctc_value`，因此不会把用户恢复的系统智能充电值 `1` 再改回 `0`。设置页的系统通知权限、通知渠道、电池优化、悬浮窗、无障碍和 Shizuku 连接状态仍从 Android 与 Shizuku 实时读取，并在启动、恢复前台和授权回调后刷新。
 
 beta22 将电池电流读取顺序与 LLPower 对齐：先 `CURRENT_NOW`，再 `CURRENT_AVERAGE`，最后尝试 `/sys/class/power_supply/.../current_now` 等节点；无效哨兵归零，只有绝对值大于 20000 时才按微安换算。该机快充时 `CURRENT_NOW` 约为 `±9,500..±10,100` mA，旧实现的 10000 阈值会把越过阈值的一帧错误除以 1000，导致界面在约 38 W 和 0 W 之间跳动。功率由同一电流与电池电压直接计算，电流和功率使用同一修正结果。
 
@@ -173,7 +174,7 @@ T ≥ T2                        → 温度条件 2 的目标
 - 插拔电广播会立即唤醒控制服务；屏幕开关广播控制熄屏刷新频率、自动关闭和亮屏恢复。
 - 状态通知在接电时存在，即使总开关关闭也显示“亮屏快充未启用”；拔电或通知功能关闭时撤掉。Android 16 及以上使用 `Notification.ProgressStyle`、`battery_live_update_v2` 通道、`android.requestPromotedOngoing` 和 `POST_PROMOTED_NOTIFICATIONS` 对齐 LLPower 的实时活动卡片；ColorOS 的“流体云显示实时活动”关闭时系统会拒绝提升，必须由用户在 OPPower 的系统通知设置中开启。旧系统保留普通通知和 `android.app.preferSmallIcon` 兼容路径。
 - 通知栏不再提供“本次关闭”动作；关闭控制统一通过总开关或一键恢复完成。
-- 第一版不启动独立 shell 看门狗。后续可在充电且 `cosa != 0` 时启用低频看门狗，AC 断开后恢复并退出。
+- 不启动独立 shell 看门狗，不加入高频或低频守门轮询。控制器只在目标、基础档或外部偏移变化时写入并触发一次热控重算；稳定期间只读，AC 断开后恢复并退出。
 
 ## 9. Shizuku 与权限
 
@@ -186,8 +187,6 @@ settings get system oplus_camera_3rd_activity
 settings put system oplus_camera_3rd_activity 0|1|00|01
 settings get system oplus_float_window_show
 settings put system oplus_float_window_show 0|1|00|01
-settings get system smart_charge_switch_state
-settings put system smart_charge_switch_state 0|1
 dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy
 dumpsys activity service com.oplus.battery/.OplusBatteryService getThermalStatus
 ```

@@ -42,7 +42,7 @@ OPPower 写入目标 `cosa` 后立即触发一次系统热控重算；稳定期�
 | 入口 | 已验证结果 | 使用结论 |
 | --- | --- | --- |
 | `cosa_ctc_value` | 能按基础档计算目标 gear；外值漂移后下一周期可纠正；切换目标不经过 0 | 核心控制路径，稳定保留 |
-| `smart_charge_switch_state=0` | 同条件相邻复测约增加 0.55–0.99 W，稳定但不足以单独突破功率层 | beta21 作为补充提升接入；控制期间写 0，暂停时恢复原值，不重复轮询 |
+| `smart_charge_switch_state=0` | 同条件相邻复测约增加 0.55–0.99 W，稳定但不足以单独突破功率层 | beta21 曾作为补充提升；**beta27 已移除全部读写，系统值保持用户设置的 1** |
 | BatteryService `setChargingLevel` | beta9–beta15 曾用于绕过空策略；会与热控重算写回 12/15 冲突并造成跳 0 W | **beta16 已删除，禁止重新接入** |
 | `SmartChgMode=0` + 当时的 `customize=1` | 历史组合只有约 1–3 W 的小幅、不稳定收益，后期还改变了自然策略 | **beta17 已移除，禁止接入** |
 | `set_charge(0,-2)` 广播 | 接收器要求 `oplus.permission.OPLUS_COMPONENT_SAFE`，Shizuku/ADB 的 shell UID 不持有该签名权限；`Broadcast completed` 不代表送达 | **排除：不会进入 `D1()`** |
@@ -649,10 +649,10 @@ beta15 将后续控制改为状态事件驱动，不再把温度当成升功率�
 | `cosa_gameMode=1` | 写入 nonpersist Provider，持续观察 30 秒，随后删除 | 写入和回读成功；外接功率计约 16 W，策略 `chargeVal` 仍为 12；没有持续高 5 W 的变化 | 可写但无提速收益，排除 |
 | `/sys/class/oplus_chg/common/bcc_current` | 源码审计及设备权限检查 | 内核 store 会把 0.1 A 单位换算成 mA，并直接给 VOOC、UFCS、PPS 的 `BCC_VOTER` 电流 votable 投票；但 shell/Shizuku UID 2000 无法进入 `/sys/class/oplus_chg/common`，返回 Permission denied | 真实电流入口存在，但当前权限不可用 |
 | `getChgConfig` / `getChargingModeInGsmCall` | GuardElf 事务 45 / 40 只读探测 | Binder 返回 `com.oplus.permission.safe.POWER` 权限拒绝 | 当前权限不可读，也不能据此接入 |
-| `smart_charge_switch_state` | 当前值检查 | 当前为 `1`，系统智能充电保护总开关开启；可通过 system settings 写入并恢复 | 高 SOC 下的候选开关，需在接电后做开启/关闭 A/B |
+| `smart_charge_switch_state` | 历史 A/B | 系统默认 `1`；beta27 起 OPPower 不提供读取、写入或恢复入口 | 保留系统值 `1`，不再是应用可调候选 |
 | `smart_charge_protection_switch_state` | 当前值检查 | 当前为 `1`，智能充电保护策略也开启 | 与上一项分开做单变量 A/B，不能同时切换 |
 
-现有结果仍不能证明存在新的稳定提速写入入口。`bcc_current` 虽然是最接近主动电流控制的节点，但不能绕过 SELinux，也不应通过其他方式伪装系统 UID。下一轮优先验证 `smart_charge_switch_state`：保持同一 SOC、充电器、线材和前前台场景，先记录开启状态 30 秒，再切到 0 观察 30 秒，最后恢复 1。只有外接功率计持续提高至少 5 W 且可重复，才纳入可接入参数。
+现有结果仍不能证明存在新的稳定提速写入入口。`bcc_current` 虽然是最接近主动电流控制的节点，但不能绕过 SELinux，也不应通过其他方式伪装系统 UID。历史上的 `smart_charge_switch_state` A/B 仅得到约 0.55–0.99 W 且伴随升温，beta27 已停止应用读写并把系统值保留为 `1`。
 
 ## 19. beta16：移除原生充电级，修复跳 0 W（2026-10-24）
 
@@ -745,7 +745,7 @@ JVM 单测已通过。beta19 的安装后接电复验需确认：41°C 附近不
 
 结论：
 
-- `smart_charge_switch_state=0` 的相邻重复对照只增加约 0.55–0.99 W，且温度同步上升，不能视为突破功率层的独立入口。按用户决定，beta21 仍将它作为补充提升保留；只在控制有效时写 0，暂停时恢复原值。
+- `smart_charge_switch_state=0` 的相邻重复对照只增加约 0.55–0.99 W，且温度同步上升，不能视为突破功率层的独立入口。beta21 曾将其作为补充提升保留；beta27 已按用户要求彻底移除读写，系统值保持为 `1`。
 - `smart_charge_protection_switch_state=0` 反而下降约 0.33 W，策略字段不变；排除。
 - 两项已恢复为 `1`。本轮没有新增可接入的功率参数。
 
@@ -817,3 +817,86 @@ gearVal=0, chargeVal=12, speedChargeAdd=0
 - 功率读取保留 LLPower 的两条只读路径：属性与 sysfs 优先，均无有效值时再执行一次固定 `dumpsys battery`。若 AC 在线且未充满，而所有通道瞬间都返回零，最多复用 3.5 秒最近一帧可靠电流与电压；超过、拔电或充满后立即接受零值。正常非零变化仍按 1 秒刷新，不做防抖或平滑。
 - 本轮继续禁用 `setChargingLevel`、`set_charge(0,-2)`、`SmartChgMode`、`customize_charge_switch_state` 和守门轮询；不修改系统热保护，不操作微信。
 - 真机验收应在同一充电器、同一 SOC 与温度下保持 OPPower 后台至少 3 分钟，同时用 LLPower 对照功率；若 logcat 出现 `ChargeControlService destroyed; persisted control intent retained`，确认 `created/started` 重建后 `cosa` 自动恢复而无需切前台。
+
+## 34. 2026-10-26：保护开关与热控路径审计（只读）
+
+本轮沿着 ColorOS 17 / RMX8899 随机 ROM 的反编译源码，审计了 `smart_charge_protection_switch_state`、`regular_charge_protection_switch_state`、`low_power_charging_state` 与热控策略写入之间的关系；没有连接手机、没有写入系统设置、没有操作微信。
+
+- `smart_charge_protection_switch_state` 和 `regular_charge_protection_switch_state` 由 `SmartChargeProtectionController` 观察。前者关闭/开启会重置该控制器的智能慢充保护状态、计时、通知和部分本地状态；后者主要切换定时充电保护行为。它们不是 `ThermalPolicy` 的 gear 输入，也没有发现它们直接传入 `ThermalControlUtils.D1(charge, speedChargeAdd, package)`。不应把关闭电池健康保护当作稳定提速参数；本轮未测试它们对实际功率的影响。
+- `low_power_charging_state` 被电池设置/低功耗充电控制器、无线充电计划和搜索索引使用；该调用链属于低功耗/无线充电计划状态，未发现它进入插电热控 `D1()` 策略选择或 VOOC/UFCS/PPS 的可写电流 voter。当前不列为有证据的有线充电提速入口。
+- 热控对 `D1()` 的实际调用来自当前 `ThermalPolicy.charge` 与 `ThermalPolicy.speedChargeAdd`：普通策略处理、类别变化和充电状态变化都会复用当前 policy 字段后执行 `setSmartCoolDown()`。系统根据前台包、热状态和复杂场景选择 policy；`speedChargeAdd` 在 single-speed 分支关闭时不会成为独立功率倍率。
+- ROM 热控 XML 的默认 `common_config` 并没有统一给所有档位固定写出 `charge=0/speedChargeAdd=-2`：gear 2/3 明确给 `speedChargeAdd=2`，其他列出的 gear 多为省略字段并由策略默认补齐。微信浮窗复杂场景 `float_window_scene_101-float_window_scene_102` 则明确配置 gear 0 为 `charge=12,speedChargeAdd=0`、gear 1 为 `charge=9,speedChargeAdd=0`、gear 2–4 为 `charge=6,speedChargeAdd=0`。因此同一计算 gear 会因为系统选中的场景和策略组对应不同 cooldown/附加档；这些 XML 是策略参数，不是直接的瓦数映射，也不能仅据此断言某场景必然较慢。
+- `oplus_float_window_show` 的观察器会立刻调用 `m.j2(null,0)` 请求复杂窗口策略重算。设置值本身只是触发状态刷新；窗口集合仍由系统获取并分类，不能用把该值写成 0 来保证微信悬浮窗场景消失。历史上实测写 0 后仍出现 launcher/OPPower 的 `float_window_scene_102`，所以不要靠改这个开关隐藏或关闭微信浮窗。
+- 本轮没有发现新的、经源码链路证实可由普通 Shizuku 稳定下发并提升有线功率的参数。beta27 只保留已确认的 `cosa_ctc_value` 目标 gear 控制；`setChargingLevel`、`set_charge(0,-2)`、`SmartChgMode`、`customize_charge_switch_state`、`single_speed_charge_state`、低频守门轮询仍按前文禁用。任何新增候选需先证明有可写路径和明确进入实际 thermal/cooldown 或 charger current 控制，再征求单变量真机测试动作；测试前告知用户并记录原值。
+
+#### 34.1 本轮继续审计：策略偏移与热控优化编号（2026-10-26，只读）
+
+- `vb.i` 的类名虽短，注释和实现名为 `PolicyOffsetConfig`。它解析 `mode_policy_offset` 项，可按启用模式、场景和 tempGear 对 `ThermalPolicy` 的 `charge` 应用 offset、override、max 或 min；因此该项确实可能改变策略计算结果，但它不是直接 charger/HAL 写入接口。
+- 配置由 `ub.r.d()` 从 `content://com.oplus.romupdate.provider.db/update_list` 查询，随后由热控配置管理器缓存和解析。当前提取的 `sys_thermal_control_config.xml` 未包含 `level/mode_policy_offset` 项；ROM Provider 的实际数据受 `OPLUS_COMPONENT_SAFE` / `RUS_WRITE_DATABASE` 权限保护，既有 Shizuku/shell 读写探测也被拒绝。向 `sys_thermal_control_list` 写普通 Settings 字符串不能替代 Provider 数据，也不能成为该项的可写入口。故本项列为“可能参与策略、但当前不可由 OPPower/Shizuku 配置或验证”，不列为可实操提速参数。
+- `oplus_customize_thermal_control_optimization_number` 在 `ThermalControlUtils.j1()` 中由系统递增并写回；热控控制器只在特定温控状态更新后调用该方法。观察器读到 0 时只把本地计数 `R` 清零。源码没有显示这个编号写入 `ThermalPolicy.charge`、`speedChargeAdd` 或 charger HAL，也没有显示写它本身会请求策略重算。把它写成 0 至多重置计数，不是功率或热控档位控制；不应把它接入 OPPower，也不安排真机功率测试。
+- 本轮结论：没有新增可实操、权限可达且进入有线充电限流链路的参数。下一轮若继续源码筛选，优先找系统更新 Provider 以外、具有普通 Shizuku 可写路径且明确进入 `D1()`/充电电流 voter 的输入；禁止用未经授权的 Provider 写入或绕过权限来验证。
+#### 34.2 旁路、远程服务与模式输入复核（2026-10-26）
+
+本轮先只读审查本地源码，随后只读检查了已在线的 `192.168.10.7:45803` / RMX8899。没有在手机上写 Settings、发送广播、下发充电级、切换前台应用或操作微信；没有构建、安装 APK。以下候选的“源码路径存在”和“本机写入/功率有效”分别记录，不能互相代替。
+
+**只读设备基线**（手机时间 2026-10-26 03:05–03:07，Asia/Shanghai）：未接电、SOC 65%、电池约 40.1°C、热控温度约 41.956°C、`Thermal Levels=[9]`、`cosa_ctc_value=0`。`gt_mode_state_setting=0`，`high_performance_mode_on=1`，`bypass_charge_state=0`，`smart_charge_switch_state=0`，`speed_charge_state=3`，`single_speed_charge_state=0`；充电保护状态字段均为 0。同次策略回读为 `com.dragon.read_float_window_scene_101 / gearVal=9 / chargeVal=1 / speedChargeAdd=-2`，仅记录未接电时策略。这些是未接电时的读数，不构成功率 A/B；`smart_charge_switch_state=0` 也不单凭当前值判断由谁写入或是否为残留。
+
+`getThermalConfig` 当前返回 `ConfigFile=sys_thermal_control_config.xml`、`ConfigVersion=2026082712`。检查的 `/odm/etc/temperature_profile` 目录没有 `sys_thermal_control_config_gt.xml`；其余已检查的 product/vendor 配置目录不存在。系统实际通过 `OplusCfgFilePolicy` 选最高优先级文件，也可能读取受权限保护的 RUS 数据，因此上述目录检查不能证明所有配置源均无 GT 策略。
+
+| 新复核入口 | 源码中的实际作用 | 可达/写入证据 | 本轮处理 |
+| --- | --- | --- | --- |
+| `bypass_charge_state` / `bypass_charge_value` | `g9.b` 读写 System Settings；`g9.a` 观察变化，达到电量门槛后经 `t6.g.K(25, "1+switch=1")` 下发旁路，退出用 `switch=0`。系统中文说明为“优先向系统供电，降低设备发热”，不是电池增流倍率 | 已只读确认本机 state=0、value 缺失；本轮未做 Settings 写入或 HAL 生效验证 | 当前关闭，不是正在限制电池充电的已知旁路条件；不作为提速设置接入。开启会改变供电分配，不能把适配器功率与电池侧功率混用 |
+| `RemoteClientService` / `RemoteUiClientService` 的 `setChgConfig` 封装 | 两者确实都转入 `t6.g.K(flag, extra)`，最终调用 `OplusBatteryManager.setChgConfig` | APK Manifest 分别要求 `com.oplus.permission.safe.LOG`、`com.oplus.permission.safe.SECURITY`。本地 2026-10-19 完整权限快照中前者为 signature/privileged、后者为 signature，shell UID 2000 两项均无授权 | 没有新增普通 Shizuku 通路；不把 exported=true 当作可调用，不尝试绕过组件权限 |
+| `oplus_power_auto_hide_power_state` / `ui_power_adaptive_mode` | `r9.a` 将 `deadzone/reserve` 交给 `setChgConfig(42, …)` 后记录到 Global Settings；`PowerHideDecision.onChargingStarted()` 主动取消电量保留动作 | Settings 记录本身不是 HAL setter；`restoreFromSettings` 是内部恢复流程，没有发现对该记录的实时观察器。直接 flag 42 仍受现有权限边界限制 | 属于电量保留/放电管理链，当前无进入充电增流的证据；不以修改状态镜像做功率测试 |
+| `resume_charge_switch_state` | `t6.g.P()` 选择满电后 95% 再恢复充电的行为；系统资源文本明确写出 100% 停充、95% 恢复 | 本机只读为缺失，读取默认 1；本轮未写入 | 不是 65% 电量时 20 W / 30 W 分层的已证实原因，不作为中段功率控制 |
+| `gt_mode_state_setting` | `b6.q.h` 的观察器调用 `m.Y1()`，再由 `rb.h.a1()` 切换 GT 热控配置并经 `l2()` 重算；区别于当前为 1 的普通高性能模式。GT 同时改变刷新率/性能状态 | 本机可读、当前 0；旧 2026-10-19 快照为 1。shell 有 WRITE_SETTINGS，但本轮未确认该键写入、GT 专用配置是否存在或功率增益。若 GT 文件缺失、RUS 无可用版本，加载器回落普通 XML | **保留为有条件、未测试的模式候选**。先确认实际策略有差异，才安排单变量接电 A/B；不自动接入，不用提高设备负载/发热代替充电增益 |
+| `sys_oplus_high_performance_spec` | `BatteryBenchMarkManager` 观察该字符串，改变 benchmark 标志与 thermal mode；热控 `t1()` 对 benchmark 存在跳过部分框架控制的分支 | 本机缺失；本轮未写入，尚无独立功率证据 | 涉及多项性能/热控行为，不能当成单独充电参数。保持关闭，不用伪装跑分状态追求功率 |
+| 一键降温 `one_key_cooling_charge` / 散热背夹 `heat_dissipation_back_clamp_mode` | 一键降温在 `yb.c` 中覆盖 CPU/GPU/亮度/刷新率及 charge（默认 1），`xb.o` 还经 `setChargerCycle("user_disable")` 进入充电约束。背夹键在已审 `CoolingBackClipFeature` 中控制传感器注册与识别，未发现直接 charger 电流 setter | 一键降温参数来自内部配置，广播受 SECURITY 权限保护；本机背夹键为 0。两项均未做写入/功率验证 | 不作为已证实的提速参数；不存在“写一个同名 Settings 参数即可改降温 charge”的证据 |
+
+**权限核验边界**：本机 `cmd package check-permission` 和 `pm check-permission` 都返回 `Unknown command`，不算权限测试成功；远程服务权限结论来自 APK Manifest 和本地已保存的完整 shell shared-UID 权限快照。本轮没有连接受保护服务或调用其写方法。
+
+#### 34.3 `chargeVal=-2` 与 `--` 的语义补充（2026-10-26）
+
+已同时核对 `rb.b`（`HeatSourceController.java`）和对应 `smali/rb/b.smali`：`e(ThermalPolicy)` 对原始 `policy.charge == -2` 返回 `0`，其他值原样返回。`ThermalControllerCenter.A2()`、`B2()`、充电状态更新等调用先经过这个转换，再把结果传入 `ThermalControlUtils.D1()`。因此：
+
+```text
+原始 policy.charge=-2 → HeatSourceController.e()=0 → D1(0, speedChargeAdd, pkg)
+```
+
+- 原始 `chargeVal=-2` 是“此策略字段未设置”的值，在上述充电调用路径中会归一化成 level 0；不能只凭它为负数就判断充电策略无效。`ThermalPolicy.POLICY_NO_OP` 是另一个值 `-3`，不能混为一谈。
+- 这不证明对应 HAL 写入已经完成。`D1()` 仍检查真实充电/亮屏/锁屏等状态；是否产生更高功率须看同一时刻的策略调用与实际功率。
+- `speedChargeAdd=-2` 不会与 `chargeVal` 做加法求 gear。普通模式下它不是独立功率倍率，仍沿用现有 D1 结论。
+- 当前 OPPower 用正则保留实际的负数诊断值；页面 `chargeVal=--` 只在解析结果为 null 时显示，表示没读到这个字段。`--`、原始 `-2`、显式 `0` 必须分别记录，不能拿 `--` 反推 cooldown 0。
+- 此发现仅修正文档中的诊断解释；不扩大 `cosa` 写入范围，不用 `-11` 或以下去制造字段缺失，也不恢复原生充电级调用。
+
+**本轮结果与下次动作**：没有新增“已证实普通 Shizuku 可写且可稳定保持 30 W+”的参数。GT 保留为未测试候选，其余按表记录作用或阻塞原因。下次接电优先保留同一前台/浮窗、同一 gear 和同一 SOC 温度短时条件，先读实际配置与 charge/cooldown，再决定是否值得做一次 GT 单变量 A/B。测试前告知唯一动作、原值和恢复方式；若只增加设备功耗/温度或配置没有独立变化，则不集成。既有禁用项维持不变。
+#### 34.4 GT 与降温设置接电 A/B（2026-10-26）
+
+用户指定只测试 `gt_mode_state_setting` 与“一键降温/散热背夹”两组。测试条件为 RMX8899、ColorOS 17、AC 10 V、真实亮屏、系统原生热保护开启；OPPower 使用已有最大输出将计算 gear 保持 0。每组只写一个 System Settings 键，读到回写值后采样 25 秒并恢复原值；脚本在拔电、熄屏或电池温度达到 43.0°C 时停止。三次候选测试的原始值与恢复回读均为 `0`。结束后还恢复了测试开始时关闭的亮屏快充总开关和 `cosa_ctc_value=0`。
+
+| 阶段 | 有效样本 | 功率均值 / 范围 | 电池温度均值 | SOC | 基础档 / 计算 gear | 策略 |
+| --- | ---: | --- | ---: | ---: | --- | --- |
+| gear 0 基线 | 21 | 23.04 W / 22.86–23.08 | 39.34°C | 65% | 6 / 0 | `float_window_scene_101`，`chargeVal=12`，`speedChargeAdd=0` |
+| GT = 1 | 21 | 23.06 W / 22.69–23.14 | 41.14°C | 69–70% | 8 / 0 | 同上 |
+| 恢复 GT = 0 | 17 | 22.75 W / 22.69–23.05 | 41.32°C | 70% | 8 / 0 | 同上 |
+| 一键降温 = 1 | 21 | 22.82 W / 22.66–23.23 | 41.40°C | 70–71% | 8 / 0 | 同上 |
+| 散热背夹状态 = 1 | 21 | 22.56 W / 22.17–22.66 | 41.46°C | 71–72% | 8 / 0 | 同上 |
+| 全部恢复 | 13 | 22.17 W / 固定值 | 41.60°C | 72% | 8 / 0 | `cosa=-8`，三项候选均为 `0` |
+
+结论：
+
+- `gt_mode_state_setting 0 → 1 → 0` 写入和回读成功，但没有改变 category、`chargeVal`、`speedChargeAdd` 或计算 gear，也没有提高功率。测试期间温度上升、SOC 发生跳变，不能把绝对功率差归因于 GT；反过来，策略字段完全未变，足以排除“GT 当前可定量改变这组热控充电结果”的假设。
+- 一键降温写入和回读成功，但设备 `/sys.data.oplus.onekeycooling.support=false`。测试期间未观察到温度下降、基础档下降或充电策略改变；功率反而略低。当前固件没有可用的一键降温支持，不能作为提速入口。
+- `heat_dissipation_back_clamp_mode=1` 只修改系统的“背夹连接状态”镜像。在未接真实背夹时，没有触发策略变化；该次结果不能评价真实物理背夹接入后的散热效果，但可确认“仅写这个设置值不会提高当前充电策略”。
+- 所有测试中 `chargeVal` 始终为 12、`speedChargeAdd` 始终为 0。稳定 30 W+ 所需的原生 `chargeVal=0 / speedChargeAdd=-2` 并未由这三项设置触发。
+- 本轮只做了 A/B，没有增加应用代码、没有构建 APK。测试结束后恢复：`gt_mode_state_setting=0`、`oplus_one_click_cooling=0`、`heat_dissipation_back_clamp_mode=0`、总开关关闭、`cosa_ctc_value=0`。手机仍接电，最终电池约 41.7°C，Thermal Levels=[8]。
+
+原始逐秒记录位于 `work/live-tests/candidate-ab-20261026-*.json` 与同名 `.log`；本次使用的固定白名单采样脚本为 `work/live-tests/candidate_ab_20261026.py`，只允许上述三个 Settings 键中的单个键 `0 → 1 → 0`，不包含 HAL、广播、原生充电级或微信操作。
+
+
+## 35. beta27：恢复系统智能充电默认值（2026-11-06）
+
+- 用户要求把 `smart_charge_switch_state` 恢复为系统默认 `1`，不再用约 0.55–0.99 W 的小幅收益换取智能充电策略关闭。
+- beta27 从 `ChargingGateway`、控制器、服务持久化状态、Shizuku Gateway 和特权命令白名单中移除了该设置的全部读取、写入与恢复通路。快充控制期间只写 `cosa_ctc_value` 并触发热控重算。
+- 旧版本持久化的 `control_original_smart_charge_switch_state` 不再参与控制；升级后已在当前 RMX8899 上将系统值恢复为 `1`，并确认新版本不会再次写回 `0`。
+- 这次改动不调整 `cosa` 范围、目标 gear、功率曲线、通知或页面布局，也不恢复任何原生充电级轮询。

@@ -75,6 +75,22 @@ class CurveProcessingTest {
     }
 
     @Test
+    fun chargingZeroDropoutsAreNotRenderedAsRealDips() {
+        val snapshot = CurveProcessing.processPower(
+            listOf(
+                point(baseTime + 1_000L, power = 20f),
+                point(baseTime + 2_000L, power = 0f),
+                point(baseTime + 3_000L, power = 21f),
+            ),
+            baseTime,
+            baseTime + 10_000L,
+        )
+
+        assertTrue(snapshot.points.isNotEmpty())
+        assertTrue(snapshot.points.all { it.value >= 15f })
+    }
+
+    @Test
     fun temperatureUsesMinuteBucketsAndSevenMinuteGapsSplitSegments() {
         val alignedMinute = baseTime - (baseTime % CurveProcessing.TEMPERATURE_BUCKET_MS)
         val firstBucket = CurveProcessing.processTemperature(
@@ -97,6 +113,23 @@ class CurveProcessingTest {
             baseTime + CurveProcessing.CURVE_GAP_MS + 2_000L,
         )
         assertEquals(2, split.segments.size)
+    }
+
+    @Test
+    fun residentHistoryKeepsOnlyTheEightHourChartWindow() {
+        val end = baseTime + CurveProcessing.HISTORY_WINDOW_MS + 60_000L
+        val points = listOf(
+            point(baseTime, power = 10f),
+            point(end - CurveProcessing.HISTORY_WINDOW_MS - 1_000L, power = 20f),
+            point(end - CurveProcessing.HISTORY_WINDOW_MS, power = 30f),
+            point(end, power = 40f),
+        )
+
+        val retained = CurveProcessing.historyWithinWindow(points, end)
+
+        assertEquals(2, retained.size)
+        assertEquals(end - CurveProcessing.HISTORY_WINDOW_MS, retained.first().epochMillis)
+        assertEquals(end, retained.last().epochMillis)
     }
 
     @Test

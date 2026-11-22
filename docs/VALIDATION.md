@@ -397,3 +397,16 @@ Thermal Levels 写入验证：
 - 修正此前文档对 LLPower 的过度简化：实际同时存在 BatteryEngine 的属性/sysfs 路径，以及 ChargeEngine 的 dumpsys 后备路径。OPPower 按这些只读来源组合，并确保后备电流和电压取自同一帧。
 - JVM 单测覆盖 AC 伪零保持、超时接受零、拔电与充满禁止复用、正常非零变化立即采用。完整 53 项 JVM 单测全部通过（0 failure、0 error、0 skipped）；Debug Kotlin 编译、`assembleDebug` 和 Android lint（0 error，20 warning）通过。APK 核对为 versionCode 26、versionName 1.0.0-beta26、v2 debug 签名有效，归档与根目录副本 SHA-256 一致。
 - 真机后台 3 分钟 A/B 与 logcat 生命周期确认需在 beta26 安装后执行。
+
+## beta27：恢复系统智能充电默认值（2026-11-06）
+
+- 移除 `smart_charge_switch_state` 的全部应用侧读取、写入、恢复和持久化状态，并从 Shizuku Gateway 与固定命令白名单移除该键；控制会话只保留 `cosa_ctc_value` 写入与一次热控刷新。
+- 删除 3 项只覆盖旧开关读写/恢复的控制器测试，并新增命令白名单拒绝测试；当前完整 50 项 JVM 单测全部通过（0 failure、0 error、0 skipped）。
+- Debug Kotlin 编译、`:app:assembleDebug` 和 Android lint 通过；lint 为 0 errors、20 warnings。Debug APK 使用 v2 debug 签名，versionCode 27、versionName 1.0.0-beta27。
+- APK 位于 `release/1.0.0-beta27/OPPower-1.0.0-beta27-debug.apk`，SHA-256 为 `EADD75F9A268D304161E9583F65BF5D7C5B926C9B8D741E04213139F19580B92`；归档与根目录副本哈希一致，已覆盖安装到 RMX8899。
+- 安装后通过 `192.168.10.5:43633` 将 `smart_charge_switch_state` 恢复为 `1`。在 OPPower 前台服务运行且 `cosa=-10` 活跃控制期间，连续 6 次采样（约 11 秒）系统值始终为 `1`，没有再被改回 `0`。
+## beta27 充电记录时间加权与长时间内存优化（2026-11-22）
+
+- 充电记录的平均功率、平均电流、平均温度和充入 mAh 改为按相邻采样实际间隔进行梯形加权；3 秒、5 秒和未充电 180 秒采样都能兼容。超过 5 分钟的异常空档会跳过加权与积分，峰值和最高温度仍保留全部样本。
+- 内存中不再为每条记录复制完整原始点列表。SQLite 继续保留 24 小时用于记录摘要，主页面和曲线总线只驻留最近 8 小时；当前会话改为 O(1) 增量累计，新采样不再重扫整段会话。
+- 新增不等间隔梯形平均、异常空档排除、批量与增量结果一致、8 小时内存窗口测试。完整 62 项 JVM 单测通过（0 failure、0 error）；`:app:testDebugUnitTest`、`:app:assembleDebug`、`:app:lintDebug` 通过，lint 为 0 errors、20 warnings。

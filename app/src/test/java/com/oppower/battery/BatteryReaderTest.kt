@@ -24,54 +24,12 @@ class BatteryReaderTest {
     }
 
     @Test
-    fun privilegedFallbackRunsOnlyForAcOnlineZeroOrInvalidVoltage() {
-        assertTrue(
-            shouldReadPrivilegedFallback(
-                currentMa = 0f,
-                voltageMv = 4_120,
-                levelPercent = 72,
-                status = 2,
-                acOnline = true,
-            ),
-        )
-        assertTrue(
-            shouldReadPrivilegedFallback(
-                currentMa = 0f,
-                voltageMv = 0,
-                levelPercent = 72,
-                status = 2,
-                acOnline = true,
-            ),
-        )
-        assertFalse(
-            shouldReadPrivilegedFallback(
-                currentMa = 0f,
-                voltageMv = 4_120,
-                levelPercent = 72,
-                status = 3,
-                acOnline = false,
-            ),
-        )
-        assertFalse(
-            shouldReadPrivilegedFallback(
-                currentMa = 0f,
-                voltageMv = 4_120,
-                levelPercent = 99,
-                status = 2,
-                acOnline = true,
-            ),
-        )
-        assertFalse(
-            shouldReadPrivilegedFallback(
-                currentMa = 0f,
-                voltageMv = 4_120,
-                levelPercent = 98,
-                status = 5,
-                acOnline = true,
-            ),
-        )
+    fun privilegedProbeRunsForEveryEligibleChargingSample() {
+        assertTrue(shouldProbePrivilegedBattery(levelPercent = 72, status = 2, acOnline = true))
+        assertFalse(shouldProbePrivilegedBattery(levelPercent = 72, status = 3, acOnline = false))
+        assertFalse(shouldProbePrivilegedBattery(levelPercent = 99, status = 2, acOnline = true))
+        assertFalse(shouldProbePrivilegedBattery(levelPercent = 98, status = 5, acOnline = true))
     }
-
     @Test
     fun privilegedFallbackReplacesPrimaryZeroWithoutMixingSamples() {
         val resolved = resolveBatteryMeasurement(
@@ -83,6 +41,22 @@ class BatteryReaderTest {
         assertEquals(493f, resolved.currentMa, 0f)
         assertEquals(3_978, resolved.voltageMv)
         assertEquals(1.961154f, calculatePowerW(resolved.currentMa, resolved.voltageMv), 0.000001f)
+    }
+
+    @Test
+    fun directPrivilegedSourceCorrectsAPlausibleButWrongPrimaryReading() {
+        val resolved = resolveBatteryMeasurement(
+            primaryCurrentMa = 5_000f,
+            primaryVoltageMv = 4_100,
+            fallback = PrivilegedBatteryReading(
+                currentMa = 8_000,
+                voltageMv = 4_050,
+                source = PrivilegedBatterySource.BATTERY_SYSFS,
+            ),
+        )
+
+        assertEquals(8_000f, resolved.currentMa, 0f)
+        assertEquals(4_050, resolved.voltageMv)
     }
 
     @Test
@@ -200,6 +174,25 @@ class BatteryReaderTest {
             stabilizer.stabilize(0f, 0, true, true, 4_501L).currentMa,
             0f,
         )
+    }
+
+    @Test
+    fun plausibilityRejectsMissingAndExtremeMeasurements() {
+        assertTrue(isPlausibleMeasurement(10_010f, 3_940))
+        assertFalse(isPlausibleMeasurement(0f, 3_940))
+        assertFalse(isPlausibleMeasurement(10_010f, 0))
+        assertFalse(isPlausibleMeasurement(20_001f, 3_940))
+    }
+
+    @Test
+    fun expiredMissingSampleIsExplicitlyInvalidInsteadOfZeroWatts() {
+        val stabilizer = CurrentSampleStabilizer(holdMillis = 5_000L)
+        stabilizer.stabilize(8_500f, 4_000, true, true, 1_000L)
+
+        val expired = stabilizer.stabilize(0f, 0, true, true, 6_001L)
+
+        assertFalse(expired.valid)
+        assertEquals(0f, expired.currentMa, 0f)
     }
 
     @Test

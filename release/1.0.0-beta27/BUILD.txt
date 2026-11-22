@@ -1,0 +1,20 @@
+OPPower 1.0.0-beta27
+versionCode: 27
+versionName: 1.0.0-beta27
+Build: debug
+Built: 2026-11-06 12:56:46 +08:00
+APK: OPPower-1.0.0-beta27-debug.apk
+SHA-256: EADD75F9A268D304161E9583F65BF5D7C5B926C9B8D741E04213139F19580B92
+
+Changes:
+- Removed all reads, writes and persisted restoration for smart_charge_switch_state.
+- Restored the device's system smart-charge setting to its default value 1.
+- Charging control now writes only cosa_ctc_value and requests a thermal refresh.
+- Removed smart_charge_switch_state from the Shizuku command whitelist.
+- No native charging-level polling or additional charging writes were introduced.
+
+Validation:
+- 50 JVM unit tests passed (0 failures, 0 errors, 0 skipped).
+- Debug Kotlin compilation passed.
+- Android lint passed with 0 errors.
+- Debug APK built, signed and archived successfully.

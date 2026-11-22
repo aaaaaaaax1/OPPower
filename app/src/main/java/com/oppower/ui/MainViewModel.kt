@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Application
 import android.app.NotificationManager
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.lifecycle.AndroidViewModel
@@ -11,8 +12,11 @@ import androidx.lifecycle.viewModelScope
 import com.oppower.battery.BatteryReader
 import com.oppower.controller.ChargingController
 import com.oppower.data.PreferencesStore
+import com.oppower.history.ChargeRecordAccumulator
 import com.oppower.history.ChartHistoryBus
 import com.oppower.history.ChartHistoryStore
+import com.oppower.history.CurveProcessing
+import com.oppower.history.buildChargeRecords
 import com.oppower.model.BatterySnapshot
 import com.oppower.model.ChargeRecord
 import com.oppower.model.ChartPoint
@@ -37,7 +41,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.roundToInt
 
 data class UiState(
     val battery: BatterySnapshot = BatterySnapshot(),
@@ -64,8 +67,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var historySignature = ""
     private val historyWriteInFlight = AtomicBoolean(false)
     @Volatile private var historyLoaded = false
-    private var currentSessionOnline: Boolean? = null
-    private var currentSessionRecord: ChargeRecord? = null
+    private var currentSessionAccumulator: ChargeRecordAccumulator? = null
     private val mutable = MutableStateFlow(
         UiState(
             settings = store.load(),
@@ -80,35 +82,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val initial = withContext(Dispatchers.IO) {
                 historyStore.load() to readRuntimeAccessSnapshot()
             }
-            val points = initial.first
+            val storedPoints = initial.first
+            val recentPoints = CurveProcessing.historyWithinWindow(storedPoints)
             val access = initial.second
-            currentSessionOnline = points.lastOrNull()?.acOnline
+            currentSessionAccumulator = null
             mutable.value = mutable.value.copy(
-                points = points,
+                points = recentPoints,
                 shizukuInstalled = access.shizukuInstalled,
                 shizukuAvailable = access.shizukuAvailable,
                 shizukuPermission = access.shizukuPermission,
                 shizukuServiceConnected = access.shizukuServiceConnected,
                 systemAccess = access.systemAccess,
             )
-            historySignature = signature(points)
+            historySignature = signature(recentPoints)
             historyLoaded = true
-            // Publish the persisted history once. The control service may already
-            // hold newer samples, so mergeLoaded preserves both sides.
-            ChartHistoryBus.mergeLoaded(points)
+            // The database keeps 24 hours for record summaries, while only the
+            // drawable eight-hour chart window stays resident in memory.
+            ChartHistoryBus.mergeLoaded(recentPoints)
 
-            // Session statistics are useful below the fold. Publish the persisted
-            // samples first so the main page and controls can become responsive
-            // without waiting for a full 24 hour record derivation.
-            val records = withContext(Dispatchers.Default) { deriveRecords(points) }
-            if (mutable.value.points === points) {
-                currentSessionRecord = seedSessionRecord(
-                    points.lastOrNull(),
-                    if (points.lastOrNull()?.acOnline == true) records.first else records.second,
-                )
+            val records = withContext(Dispatchers.Default) { buildChargeRecords(storedPoints) }
+            currentSessionAccumulator = records.currentSession
+            if (mutable.value.points.lastOrNull()?.epochMillis == recentPoints.lastOrNull()?.epochMillis) {
                 mutable.value = mutable.value.copy(
-                    chargeRecords = records.first.takeLast(50),
-                    dischargeRecords = records.second.takeLast(50),
+                    chargeRecords = records.chargingRecords.takeLast(50),
+                    dischargeRecords = records.dischargingRecords.takeLast(50),
                 )
             }
         }
@@ -120,8 +117,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (nextSignature == historySignature) return@collectLatest
                 if (points.isEmpty()) {
                     historySignature = ""
-                    currentSessionOnline = null
-                    currentSessionRecord = null
+                    currentSessionAccumulator = null
                     mutable.value = mutable.value.copy(
                         points = emptyList(),
                         chargeRecords = emptyList(),
@@ -132,19 +128,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val lastKnown = mutable.value.points.lastOrNull()?.epochMillis ?: Long.MIN_VALUE
                 val additions = points.filter { it.epochMillis > lastKnown }
                 if (additions.isEmpty()) {
-                    // mergeLoaded can replace an initial snapshot without adding
-                    // samples. Refresh records once in that uncommon case.
-                    val records = withContext(Dispatchers.Default) { deriveRecords(points) }
-                    currentSessionOnline = points.last().acOnline
-                    currentSessionRecord = seedSessionRecord(
-                        points.last(),
-                        if (points.last().acOnline) records.first else records.second,
-                    )
-                    mutable.value = mutable.value.copy(
-                        points = points,
-                        chargeRecords = records.first.takeLast(50),
-                        dischargeRecords = records.second.takeLast(50),
-                    )
+                    mutable.value = mutable.value.copy(points = points)
                 } else {
                     additions.forEach(::appendHistoryPoint)
                 }
@@ -159,17 +143,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 while (isActive) {
                     try {
                         val settings = mutable.value.settings
-                        val battery = withContext(Dispatchers.IO) {
-                            runCatching { reader.snapshot(settings) }
-                                .onFailure { android.util.Log.w("OPPower", "Battery sample failed", it) }
-                                .getOrNull()
+                        val shared = ChargeControlBus.battery.value
+                        val nowMillis = SystemClock.elapsedRealtime()
+                        val sharedIsFresh = shared != null &&
+                            nowMillis - shared.capturedAtElapsedMillis in 0L..1_500L
+                        val battery = if (sharedIsFresh) {
+                            shared?.snapshot
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                runCatching { reader.snapshot(settings) }
+                                    .onFailure { android.util.Log.w("OPPower", "Battery sample failed", it) }
+                                    .getOrNull()
+                            }
                         }
                         if (battery != null) {
                             mutable.value = mutable.value.copy(
                                 battery = battery,
                                 controllerStatus = ChargeControlBus.status.value,
                             )
-                            if (settings.historyEnabled &&
+                            if (!sharedIsFresh && settings.historyEnabled &&
                                 historyWriteInFlight.compareAndSet(false, true)
                             ) {
                                 viewModelScope.launch(Dispatchers.IO) {
@@ -307,8 +299,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearHistory() {
-        currentSessionOnline = null
-        currentSessionRecord = null
+        currentSessionAccumulator = null
         historySignature = ""
         ChartHistoryBus.reset()
         mutable.value = mutable.value.copy(
@@ -366,36 +357,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun appendHistoryPoint(point: ChartPoint) {
         val current = mutable.value
-        val sameSession = currentSessionOnline == point.acOnline
-        val base = if (sameSession) currentSessionRecord else null
-        val updated = toRecord((base?.points ?: emptyList()) + point)
-        currentSessionOnline = point.acOnline
-        currentSessionRecord = updated
+        val existing = currentSessionAccumulator?.takeIf { it.isCharging == point.acOnline }
+        val accumulator = existing ?: ChargeRecordAccumulator(point)
+        if (existing != null) accumulator.append(point)
+        currentSessionAccumulator = accumulator
+        val updated = accumulator.toRecord()
 
         val charge = current.chargeRecords.toMutableList()
         val discharge = current.dischargeRecords.toMutableList()
         val target = if (point.acOnline) charge else discharge
-        val alreadyListed = sameSession && (base?.points?.size ?: 0) >= 2 &&
+        val alreadyListed = existing != null && accumulator.sampleCount >= 2 &&
             target.lastOrNull()?.startedAtMillis == updated.startedAtMillis
         if (alreadyListed) {
             target[target.lastIndex] = updated
-        } else if (updated.points.size >= 2) {
+        } else if (accumulator.sampleCount >= 2) {
             target += updated
         }
         mutable.value = current.copy(
-            points = current.points + point,
+            points = CurveProcessing.historyWithinWindow(current.points + point),
             chargeRecords = charge.takeLast(50),
             dischargeRecords = discharge.takeLast(50),
         )
-    }
-
-    private fun seedSessionRecord(
-        point: ChartPoint?,
-        records: List<ChargeRecord>,
-    ): ChargeRecord? {
-        if (point == null) return null
-        return records.lastOrNull()?.takeIf { it.endedAtMillis == point.epochMillis }
-            ?: toRecord(listOf(point))
     }
 
     private fun signature(points: List<ChartPoint>): String =
@@ -443,53 +425,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 socRules = orderedSocTargets,
                 socStopPercent = customRules.socStopPercent.coerceIn(1, 100),
             ),
-        )
-    }
-
-    private fun deriveRecords(points: List<ChartPoint>): Pair<List<ChargeRecord>, List<ChargeRecord>> {
-        val groups = mutableListOf<List<ChartPoint>>()
-        var current = mutableListOf<ChartPoint>()
-        points.sortedBy { it.epochMillis }.forEach { point ->
-            if (current.isEmpty() || current.last().acOnline == point.acOnline) {
-                current += point
-            } else {
-                groups += current
-                current = mutableListOf(point)
-            }
-        }
-        if (current.isNotEmpty()) groups += current
-        val records = groups.filter { it.size >= 2 }.map(::toRecord)
-        return records.partition { record -> record.points.firstOrNull()?.acOnline == true }
-    }
-
-    private fun toRecord(group: List<ChartPoint>): ChargeRecord {
-        val first = group.first()
-        val last = group.last()
-        val charging = first.acOnline
-        return ChargeRecord(
-            startedAtMillis = first.epochMillis,
-            endedAtMillis = last.epochMillis,
-            startPercent = first.levelPercent,
-            endPercent = last.levelPercent,
-            peakPowerW = group.maxOf { it.powerW },
-            averagePowerW = group.map { it.powerW }.average().toFloat(),
-            maxTemperatureC = group.maxOf { it.temperatureC },
-            startVoltageV = first.voltageMv / 1000f,
-            endVoltageV = last.voltageMv / 1000f,
-            peakCurrentMa = group.maxOf { kotlin.math.abs(it.currentMa) },
-            averageCurrentMa = group.map { kotlin.math.abs(it.currentMa) }.average().roundToInt(),
-            chargeDeltaMah = if (charging) {
-                group.zipWithNext().sumOf { (left, right) ->
-                    val seconds = ((right.epochMillis - left.epochMillis).coerceAtLeast(0L)) / 1000.0
-                    ((kotlin.math.abs(left.currentMa) + kotlin.math.abs(right.currentMa)) / 2.0) * seconds / 3600.0
-                }.roundToInt().takeIf { it > 0 }
-            } else null,
-            endReason = when {
-                charging && last.levelPercent >= 100 -> "充满"
-                charging -> "拔电"
-                else -> "放电会话"
-            },
-            points = group,
         )
     }
 

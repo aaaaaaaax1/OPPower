@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -23,7 +22,6 @@ import androidx.annotation.RequiresApi
 import com.oppower.MainActivity
 import com.oppower.R
 import com.oppower.battery.BatteryReader
-import com.oppower.controller.ChargingControlStateStore
 import com.oppower.controller.ChargingController
 import com.oppower.data.PreferencesStore
 import com.oppower.history.ChartHistoryBus
@@ -93,10 +91,7 @@ class ChargeControlService : Service() {
             ChargeControlBus.requestUpdate()
         }
         prefsFile.registerOnSharedPreferenceChangeListener(prefsListener)
-        controller = ChargingController(
-            shizuku = shizuku,
-            controlState = SharedPreferencesChargingControlStateStore(this),
-        )
+        controller = ChargingController(shizuku = shizuku)
         batteryReader = BatteryReader(this, shizuku::readBatteryFallback)
         historyStore = ChartHistoryStore(this)
         overlay = KeepAliveOverlay(this)
@@ -124,6 +119,10 @@ class ChargeControlService : Service() {
                     try {
                         val settings = cachedSettings
                         val battery = batteryReader.snapshot(settings)
+                        ChargeControlBus.battery.value = SharedBatterySample(
+                            snapshot = battery,
+                            capturedAtElapsedMillis = SystemClock.elapsedRealtime(),
+                        )
                         // evaluate() also performs the safe cosa=0 restoration when
                         // the master switch is off. Keeping that path in the normal
                         // cycle prevents a disabled switch from leaving an old
@@ -347,8 +346,12 @@ class ChargeControlService : Service() {
     ): String {
         val values = buildList {
             if (settings.notificationShowBatteryPercent) add("${battery.levelPercent}%")
-            if (settings.notificationShowVoltage) add("${(battery.voltageMv / 1000f).oneDecimal()} V")
-            if (settings.notificationShowCurrent) add("${battery.currentMa} mA")
+            if (settings.notificationShowVoltage && battery.sampleValid) {
+                add("${(battery.voltageMv / 1000f).oneDecimal()} V")
+            }
+            if (settings.notificationShowCurrent && battery.sampleValid) {
+                add("${battery.currentMa} mA")
+            }
             if (settings.notificationShowTemperature) add("${battery.temperatureC.oneDecimal()}°C")
         }
         return values.joinToString("  ·  ")
@@ -378,10 +381,11 @@ class ChargeControlService : Service() {
         val level = battery.levelPercent.coerceIn(0, 100)
         val body = listOf(data, tier).filter { it.isNotBlank() }.joinToString("  ·  ")
         val usesLiveStyle = Build.VERSION.SDK_INT >= 36
+        val title = if (battery.sampleValid) "$power W" else "功率读取中"
         val builder = Notification.Builder(this, if (usesLiveStyle) StatusNotificationChannels.LIVE else StatusNotificationChannels.STATUS)
             // Android requires a small icon. ColorOS can replace ordinary
             .setSmallIcon(R.drawable.ic_notification_transparent)
-            .setContentTitle("$power W")
+            .setContentTitle(title)
             .setContentText(body)
             .setContentIntent(pending)
             .setDeleteIntent(dismissIntent)
@@ -427,12 +431,12 @@ class ChargeControlService : Service() {
             )
             .setProgress(level)
 
-    private fun notificationPower(battery: BatterySnapshot, settings: RuntimeSettings): String =
-        if (settings.notificationIntegerPower && kotlin.math.abs(battery.powerW) >= 1f) {
+    private fun notificationPower(battery: BatterySnapshot, settings: RuntimeSettings): String = when {
+        !battery.sampleValid -> "—"
+        settings.notificationIntegerPower && kotlin.math.abs(battery.powerW) >= 1f ->
             "${battery.powerW.roundToInt()}"
-        } else {
-            battery.powerW.oneDecimal()
-        }
+        else -> battery.powerW.oneDecimal()
+    }
 
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java)
@@ -574,32 +578,6 @@ class ChargeControlService : Service() {
         fun resumeNotification(context: Context) {
             start(context, ACTION_RESUME_NOTIFICATION)
         }
-    }
-}
-
-// Persist synchronously before changing the system value so a service kill cannot
-// lose the user's original smart-charge setting.
-@SuppressLint("UseKtx")
-private class SharedPreferencesChargingControlStateStore(context: Context) : ChargingControlStateStore {
-    private val prefs = context.applicationContext.getSharedPreferences("oppower", Context.MODE_PRIVATE)
-
-    override fun loadOriginalSmartChargeSwitch(): Int? =
-        if (prefs.contains(KEY_ORIGINAL_SMART_CHARGE_SWITCH)) {
-            prefs.getInt(KEY_ORIGINAL_SMART_CHARGE_SWITCH, 1)
-        } else {
-            null
-        }
-
-    override fun saveOriginalSmartChargeSwitch(value: Int): Boolean = prefs.edit()
-        .putInt(KEY_ORIGINAL_SMART_CHARGE_SWITCH, value)
-        .commit()
-
-    override fun clearOriginalSmartChargeSwitch(): Boolean = prefs.edit()
-        .remove(KEY_ORIGINAL_SMART_CHARGE_SWITCH)
-        .commit()
-
-    private companion object {
-        const val KEY_ORIGINAL_SMART_CHARGE_SWITCH = "control_original_smart_charge_switch_state"
     }
 }
 

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.IBinder
 import com.oppower.BuildConfig
 import com.oppower.battery.PrivilegedBatteryReading
+import com.oppower.battery.PrivilegedBatterySource
 import com.oppower.controller.ChargingGateway
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CountDownLatch
@@ -126,13 +127,6 @@ class ShizukuGateway(context: Context) : ChargingGateway {
         execute("settings put global ${name.requireAllowedName()} $value")
     }
 
-    override fun readSystemSetting(name: String): String =
-        execute("settings get system ${name.requireAllowedSystemName()}")
-
-    override fun putSystemSetting(name: String, value: Int) {
-        execute("settings put system ${name.requireAllowedSystemName()} $value")
-    }
-
     override fun readThermalPolicy(): String =
         execute("dumpsys activity service com.oplus.battery/.OplusBatteryService getCurThermalPolicy")
 
@@ -147,8 +141,16 @@ class ShizukuGateway(context: Context) : ChargingGateway {
     fun readBatteryFallback(): PrivilegedBatteryReading? = runCatching {
         if (!isAvailable || !hasPermission) return@runCatching null
         val values = awaitService(BATTERY_SAMPLE_TIMEOUT_MILLIS).readBatteryFallback()
-        if (values.size != 2) return@runCatching null
-        PrivilegedBatteryReading(values[0], values[1])
+        if (values.size !in 2..3) return@runCatching null
+        PrivilegedBatteryReading(
+            currentMa = values[0],
+            voltageMv = values[1],
+            source = if (values.size >= 3) {
+                PrivilegedBatterySource.fromProtocolCode(values[2])
+            } else {
+                PrivilegedBatterySource.UNKNOWN
+            },
+        )
     }.getOrNull()
 
     /**
@@ -192,11 +194,6 @@ class ShizukuGateway(context: Context) : ChargingGateway {
 
     private fun String.requireAllowedName(): String {
         require(this == "cosa_ctc_value")
-        return this
-    }
-
-    private fun String.requireAllowedSystemName(): String {
-        require(this == "smart_charge_switch_state")
         return this
     }
 
